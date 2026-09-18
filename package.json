@@ -1,0 +1,28 @@
+{
+  "name": "@labsclaw/openclaw-opencode-cli",
+  "version": "1.0.0",
+  "description": "CLI Backend adapter and OpenClaw plugin for OpenCode CLI models",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/test-adapter.js"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    }
+  },
+  "keywords": [
+    "openclaw",
+    "opencode",
+    "cli-backend",
+    "reasoning",
+    "thinking"
+  ],
+  "author": "Dr. Roger Oliveira <@SmartNewbieBR>",
+  "license": "MIT"
+}
