@@ -45,10 +45,12 @@ Para resolver a raiz do problema de forma definitiva e resiliente a futuras alte
 - **Protocolo:** Agent Client Protocol (ACP) sobre stdio/WebSocket.
 - **Objetivo:** Sessões completas de codificação e execução com thinking, histórico persistido no banco local do OpenCode, cancelamento e ferramentas nativas.
 - **Identificadores:** Sessão, projeto e request gerados dinamicamente pelo binário `opencode`.
+- **Status:** **Validado**. Handshake `initialize` e criação de sessão `session/new` funcionando com negociação de capacidades e catálogo dinâmico de modelos.
 
 ### Rota B — CLI Backend para Fallbacks (`opencode run`)
 - **Protocolo:** CLI Backend do OpenClaw com parsing estruturado de streaming JSON.
 - **Objetivo:** Permitir que modelos do OpenCode participem da cadeia tradicional de fallback do OpenClaw (`primary` -> `fallbacks`), mantendo a geração correta de tokens de reasoning.
+- **Status:** **Validado**. Captura de reasoning em tempo real e resposta final sem 403.
 
 ---
 
@@ -57,13 +59,14 @@ Para resolver a raiz do problema de forma definitiva e resiliente a futuras alte
 - [x] **Fase 0: Baseline e Repositório**
   - Criação do repositório dedicado `labsclaw/openclaw-opencode-integration`.
   - Mapeamento de versões (`openclaw` 2026.9.3, `opencode` 1.18.30).
-- [ ] **Fase 1: Canário ACPX Oficial**
-  - Configuração do backend ACPX no OpenClaw.
-  - Teste de sessão isolada com `opencode acp`.
-  - Validação de thinking e resposta no modelo `mimo-v2.5-free`.
-- [ ] **Fase 2: Plugin `opencode-cli` (CLI Backend)**
-  - Criação de pacote/plugin com `api.registerCliBackend`.
+- [x] **Fase 1: Canário ACPX Oficial (Rota A)**
+  - Criação da classe `OpenCodeAcpHarness` para stdio JSON-RPC 2.0.
+  - Validação de handshake canônico (`initialize` com `protocolVersion: 1`).
+  - Validação de criação de sessão interativa (`session/new`).
+- [x] **Fase 2: Plugin `opencode-cli` (CLI Backend - Rota B)**
+  - Criação de pacote/plugin `@labsclaw/openclaw-opencode-cli` com `api.registerCliBackend`.
   - Mapeamento de eventos SSE/JSON para o contrato de reasoning do OpenClaw.
+  - Teste de ponta a ponta com `opencode/mimo-v2.5-free`.
 - [ ] **Fase 3: Sincronização de Catálogo e Políticas**
   - Atualização do catálogo de modelos com capacidades reais de context e thinking.
   - Remoção de headers estáticos legados.
@@ -74,5 +77,5 @@ Para resolver a raiz do problema de forma definitiva e resiliente a futuras alte
 
 ## 🛠️ Tecnologias
 - **Runtime:** Node.js v26 / Bun
-- **Harness:** OpenClaw ACPX (`@openclaw/acpx`)
+- **Harness:** OpenClaw ACPX (`@openclaw/acpx`) & Agent Client Protocol (ACP)
 - **CLI Engine:** OpenCode CLI (v1.18.30+)
