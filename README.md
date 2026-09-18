@@ -67,9 +67,10 @@ Para resolver a raiz do problema de forma definitiva e resiliente a futuras alte
   - Criação de pacote/plugin `@labsclaw/openclaw-opencode-cli` com `api.registerCliBackend`.
   - Mapeamento de eventos SSE/JSON para o contrato de reasoning do OpenClaw.
   - Teste de ponta a ponta com `opencode/mimo-v2.5-free`.
-- [ ] **Fase 3: Sincronização de Catálogo e Políticas**
-  - Atualização do catálogo de modelos com capacidades reais de context e thinking.
-  - Remoção de headers estáticos legados.
+- [x] **Fase 3: Sincronização de Catálogo e Políticas**
+  - Configuração do bloco `acp` no Gateway com `acpx` e `opencode` permitido.
+  - Remoção dos cabeçalhos estáticos legados (`x-opencode-*`) em `openclaw.json`.
+  - Inclusão do modelo `opencode/mimo-v2.5-free` na cadeia oficial de fallbacks.
 - [ ] **Fase 4: Testes de Resiliência e Documentação**
   - Testes de timeout, cancelamento, restart de gateway e integridade de sessões.
 
