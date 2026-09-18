@@ -54,6 +54,20 @@ Para resolver a raiz do problema de forma definitiva e resiliente a futuras alte
 
 ---
 
+## 📖 Guia de Replicação para Outros Agentes e Instalações
+
+Para replicar esta integração do zero em uma nova máquina ou instalação do OpenClaw, consulte o guia passo a passo detalhado:
+👉 **[REPLICATION_GUIDE.md](./REPLICATION_GUIDE.md)**
+
+Contém:
+- Pré-requisitos de ambiente e runtime.
+- Diagnóstico exato do erro 403 da Zen API.
+- Passo a passo de configuração do `openclaw.json` (remoção de headers legados, bloco ACP e fallbacks).
+- Scripts de teste de bancada para validação imediata da Rota A e Rota B.
+- Matriz de troubleshooting para falhas comuns (Windows/Linux, Zod schemas, reasoning).
+
+---
+
 ## 📅 Roadmap de Implementação
 
 - [x] **Fase 0: Baseline e Repositório**
