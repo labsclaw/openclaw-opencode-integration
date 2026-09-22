@@ -1,12 +1,11 @@
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOpenCodeCliBackend } from "./src/cli-backend.js";
 
-export default {
+export default definePluginEntry({
   id: "opencode-cli",
   name: "OpenCode CLI Backend",
-  description: "Text inference fallback and thinking capture via OpenCode CLI",
+  description: "Routes OpenClaw inference through the installed OpenCode CLI with native thinking output.",
   register(api) {
-    if (typeof api.registerCliBackend === "function") {
-      api.registerCliBackend(buildOpenCodeCliBackend());
-    }
+    api.registerCliBackend(buildOpenCodeCliBackend());
   },
-};
+});
