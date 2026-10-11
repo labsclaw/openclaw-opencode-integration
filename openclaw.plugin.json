@@ -1,7 +1,7 @@
 {
   "id": "opencode-cli",
-  "name": "OpenCode CLI Backend + Provider",
-  "description": "CLI backend + provider exposing OpenCode Zen models routed via local opencode CLI (no direct Zen API key required).",
+  "name": "OpenCode CLI Backend",
+  "description": "CLI backend routing the existing opencode provider through the local OpenCode CLI (no direct Zen inference call).",
   "cliBackends": [
     "opencode-cli"
   ],

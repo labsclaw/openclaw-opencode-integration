@@ -2,6 +2,12 @@ import { runOpenCode } from "../src/adapter.js";
 import { buildOpenCodeCliBackend } from "../src/cli-backend.js";
 
 const backend = buildOpenCodeCliBackend();
+const agentIndex = backend.config.args.indexOf("--agent");
+if (agentIndex < 0 || backend.config.args[agentIndex + 1] !== "Sisyphus - ultraworker") {
+  throw new Error(
+    `OpenCode CLI backend does not pin the OMO orchestrator: ${JSON.stringify(backend.config.args)}`,
+  );
+}
 const alwaysOnArgs = backend.resolveExecutionArgs({
   baseArgs: ["node", "wrapper.js", "--thinking", "--variant", "high"],
   thinkingLevel: "always on",

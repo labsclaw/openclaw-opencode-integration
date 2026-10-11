@@ -9,7 +9,9 @@ const rawArgs = process.argv.slice(2);
 const thinking = rawArgs.includes("--thinking");
 const modelIndex = rawArgs.indexOf("--model");
 const sessionIndex = rawArgs.indexOf("--session");
+const agentIndex = rawArgs.indexOf("--agent");
 const requestedModel = modelIndex >= 0 ? rawArgs[modelIndex + 1] : undefined;
+const agent = agentIndex >= 0 ? rawArgs[agentIndex + 1] : undefined;
 // The OpenClaw CLI backend passes the provider-stripped model name (for
 // example `mimo-v2.5-free`) while OpenCode expects its canonical
 // `provider/model` form. Keep fully-qualified values unchanged so the
@@ -24,8 +26,9 @@ const variantIndex = rawArgs.indexOf("--variant");
 const variant = variantIndex >= 0 ? rawArgs[variantIndex + 1] : undefined;
 const promptArg = rawArgs
   .filter((arg, index) =>
-    !["--thinking", "--model", "--session", "--variant"].includes(arg) &&
-    index !== modelIndex + 1 && index !== sessionIndex + 1 && index !== variantIndex + 1,
+    !["--thinking", "--model", "--session", "--variant", "--agent"].includes(arg) &&
+    index !== modelIndex + 1 && index !== sessionIndex + 1 &&
+    index !== variantIndex + 1 && index !== agentIndex + 1,
   )
   .at(-1);
 
@@ -42,6 +45,7 @@ if (!prompt && process.stdin.isTTY) {
 const cliArgs = ["run", "--format", "json"];
 if (thinking) cliArgs.push("--thinking");
 if (model) cliArgs.push("--model", model);
+if (agent) cliArgs.push("--agent", agent);
 if (sessionId) cliArgs.push("--session", sessionId);
 if (variant) cliArgs.push("--variant", variant);
 if (prompt) cliArgs.push(prompt);

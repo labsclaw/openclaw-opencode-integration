@@ -27,10 +27,14 @@ export function buildOpenCodeCliBackend() {
       command: "node",
       args: [
         wrapperPath,
+        "--agent",
+        "Sisyphus - ultraworker",
         "--thinking",
       ],
       resumeArgs: [
         wrapperPath,
+        "--agent",
+        "Sisyphus - ultraworker",
         "--thinking",
         "--session",
         "{sessionId}",
