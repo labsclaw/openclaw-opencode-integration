@@ -246,3 +246,4 @@ pm2 restart openclaw-gateway
 | `spawn opencode ENOENT` no Windows | O Node.js não encontrou o executável `.cmd` no PATH do Windows | Utilizar `opencode.cmd` no Windows e `shell: true` na chamada de spawn. |
 | Terminais/janelas abrindo sem parar | Chamada de `spawn` sem `windowsHide: true` | Adicionar `windowsHide: true` nas opções de `spawn` em `src/opencode-cli-wrapper.js`. |
 | Reasoning não aparece na resposta | Falta da flag `--thinking` | Adicionar `--thinking` e `--format json` nos argumentos de chamada do `opencode run`. |
+
