@@ -5,7 +5,9 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "node test/test-adapter.js"
+    "test": "node test/test-adapter.js",
+    "verify": "node scripts/verify-plugin.mjs",
+    "pretest": "node scripts/verify-plugin.mjs"
   },
   "openclaw": {
     "extensions": [

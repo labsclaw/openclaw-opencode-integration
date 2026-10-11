@@ -1,21 +1,21 @@
 {
-  \"id\": \"opencode-cli\",
-  \"name\": \"OpenCode CLI Backend + Provider\",
-  \"description\": \"CLI backend + provider exposing OpenCode Zen models routed via local opencode CLI (no direct Zen API key required).\",
-  \"cliBackends\": [
-    \"opencode-cli\"
+  "id": "opencode-cli",
+  "name": "OpenCode CLI Backend + Provider",
+  "description": "CLI backend + provider exposing OpenCode Zen models routed via local opencode CLI (no direct Zen API key required).",
+  "cliBackends": [
+    "opencode-cli"
   ],
-  \"setup\": {
-    \"cliBackends\": [
-      \"opencode-cli\"
+  "setup": {
+    "cliBackends": [
+      "opencode-cli"
     ],
-    \"requiresRuntime\": false
+    "requiresRuntime": false
   },
-  \"activation\": {
-    \"onStartup\": true
+  "activation": {
+    "onStartup": true
   },
-  \"configSchema\": {
-    \"type\": \"object\",
-    \"additionalProperties\": false
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
   }
 }
