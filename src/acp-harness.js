@@ -1,5 +1,17 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
+
+function resolveOpenCodeCommand(explicit) {
+  if (explicit) return explicit;
+  if (process.platform !== "win32") return "opencode";
+  const npmRoot = process.env.APPDATA
+    ? path.join(process.env.APPDATA, "npm")
+    : path.join(process.env.USERPROFILE || "", "AppData", "Roaming", "npm");
+  const nativeBinary = path.join(npmRoot, "node_modules", "opencode-ai", "bin", "opencode.exe");
+  return fs.existsSync(nativeBinary) ? nativeBinary : "opencode.exe";
+}
 
 /**
  * OpenCode ACP Harness Client.
@@ -20,13 +32,21 @@ export class OpenCodeAcpHarness {
    */
   async start() {
     return new Promise((resolve, reject) => {
-      const cmd = process.platform === "win32" ? "opencode.cmd" : "opencode";
+      // Spawn the native exe (no shell) to avoid flashing a cmd.exe window on Windows.
+      const cmd = resolveOpenCodeCommand(this.command);
       const args = ["acp"];
 
       this.child = spawn(cmd, args, {
         cwd: this.workdir,
-        env: { ...process.env },
-        shell: process.platform === "win32",
+        env: {
+          ...process.env,
+          ...(process.platform === "win32" && process.env.USERPROFILE
+            ? { HOME: process.env.USERPROFILE }
+            : {}),
+          OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+        },
+        shell: false,
+        windowsHide: true,
         stdio: ["pipe", "pipe", "pipe"],
       });
 

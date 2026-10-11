@@ -1,4 +1,14 @@
 import { runOpenCode } from "../src/adapter.js";
+import { buildOpenCodeCliBackend } from "../src/cli-backend.js";
+
+const backend = buildOpenCodeCliBackend();
+const alwaysOnArgs = backend.resolveExecutionArgs({
+  baseArgs: ["node", "wrapper.js", "--thinking", "--variant", "high"],
+  thinkingLevel: "always on",
+});
+if (!alwaysOnArgs.includes("--thinking") || alwaysOnArgs.includes("--variant") || alwaysOnArgs.includes("high")) {
+  throw new Error(`Mimo always-on thinking was not normalized correctly: ${JSON.stringify(alwaysOnArgs)}`);
+}
 
 async function main() {
   console.log("=== Teste do Adaptador OpenCode CLI (Rota B) ===");
@@ -7,7 +17,7 @@ async function main() {
   try {
     const res = await runOpenCode({
       prompt: "Responda em uma unica frase curta o que e a teoria da relatividade.",
-      model: "opencode/mimo-v2.5-free",
+      model: "opencode/mimo-v2.6-flash-free",
       thinking: true,
       onReasoning: (chunk) => {
         process.stdout.write(`[REASONING] ${chunk}\n`);

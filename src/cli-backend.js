@@ -11,7 +11,7 @@ export function buildOpenCodeCliBackend() {
     id: "opencode-cli",
     modelProvider: "opencode",
     liveTest: {
-      defaultModelRef: "opencode/mimo-v2.5-free",
+      defaultModelRef: "opencode/mimo-v2.6-flash-free",
       defaultImageProbe: false,
       defaultMcpProbe: false,
       docker: {
@@ -37,7 +37,7 @@ export function buildOpenCodeCliBackend() {
       ],
       output: "jsonl",
       resumeOutput: "jsonl",
-      input: "arg",
+      input: "stdin",
       modelArg: "--model",
       sessionArg: "--session",
       sessionMode: "existing",
@@ -45,8 +45,25 @@ export function buildOpenCodeCliBackend() {
       serialize: true,
     },
     resolveExecutionArgs(ctx) {
-      const args = [...ctx.baseArgs].filter((arg) => !["--variant", "--thinking"].includes(arg));
+      const args = [];
+      const baseArgs = [...ctx.baseArgs];
+      for (let index = 0; index < baseArgs.length; index += 1) {
+        const arg = baseArgs[index];
+        if (arg === "--thinking") continue;
+        if (arg === "--variant") {
+          index += 1;
+          continue;
+        }
+        args.push(arg);
+      }
       const level = String(ctx.thinkingLevel ?? "high").toLowerCase();
+      // Mimo v2.6 exposes a boolean "always on" thinking mode rather than a
+      // provider variant. Passing --variant high makes the CLI/backend reject
+      // the request before inference starts.
+      if (level === "always on" || level === "always-on" || level === "always_on") {
+        args.push("--thinking");
+        return args;
+      }
       const variant = ["minimal", "low", "medium", "high", "xhigh", "max"].includes(level)
         ? (level === "minimal" ? "low" : level === "xhigh" || level === "max" ? "high" : level)
         : "high";

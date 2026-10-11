@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 // OpenCode's JSON event stream is intentionally translated to the generic
 // OpenClaw JSONL shape. The CLI still runs with --thinking, while the wrapper
@@ -13,21 +15,26 @@ const requestedModel = modelIndex >= 0 ? rawArgs[modelIndex + 1] : undefined;
 // `provider/model` form. Keep fully-qualified values unchanged so the
 // wrapper remains compatible with direct invocations too.
 const model = requestedModel && requestedModel.includes("/")
-  ? requestedModel
+  ? requestedModel.replace(/^opencode\/opencode\//i, "opencode/")
   : requestedModel
     ? `opencode/${requestedModel}`
     : undefined;
 const sessionId = sessionIndex >= 0 ? rawArgs[sessionIndex + 1] : undefined;
 const variantIndex = rawArgs.indexOf("--variant");
 const variant = variantIndex >= 0 ? rawArgs[variantIndex + 1] : undefined;
-const prompt = rawArgs
+const promptArg = rawArgs
   .filter((arg, index) =>
     !["--thinking", "--model", "--session", "--variant"].includes(arg) &&
     index !== modelIndex + 1 && index !== sessionIndex + 1 && index !== variantIndex + 1,
   )
   .at(-1);
 
+let prompt = promptArg;
 if (!prompt) {
+  prompt = "";
+}
+
+if (!prompt && process.stdin.isTTY) {
   console.error("OpenCode CLI wrapper requires a prompt");
   process.exit(2);
 }
@@ -37,21 +44,48 @@ if (thinking) cliArgs.push("--thinking");
 if (model) cliArgs.push("--model", model);
 if (sessionId) cliArgs.push("--session", sessionId);
 if (variant) cliArgs.push("--variant", variant);
-cliArgs.push(prompt);
+if (prompt) cliArgs.push(prompt);
 
-const child = spawn("opencode.cmd", cliArgs, {
+// Spawn the native exe (no shell) to avoid flashing a cmd.exe window on Windows.
+const npmRoot = process.env.APPDATA
+  ? path.join(process.env.APPDATA, "npm")
+  : path.join(process.env.USERPROFILE || "", "AppData", "Roaming", "npm");
+const nativeBinary = path.join(npmRoot, "node_modules", "opencode-ai", "bin", "opencode.exe");
+const OPENCODE_BIN = process.env.OPENCODE_BIN
+  || (process.platform === "win32" && fs.existsSync(nativeBinary) ? nativeBinary : "opencode");
+const child = spawn(OPENCODE_BIN, cliArgs, {
   cwd: process.cwd(),
-  env: { ...process.env },
-  shell: process.platform === "win32",
+  env: {
+    ...process.env,
+    ...(process.platform === "win32" && process.env.USERPROFILE
+      ? { HOME: process.env.USERPROFILE }
+      : {}),
+    OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+  },
+  shell: false,
   windowsHide: true,
-  stdio: ["ignore", "pipe", "pipe"],
+  stdio: ["pipe", "pipe", "pipe"],
 });
+
+if (!prompt) {
+  process.stdin.pipe(child.stdin);
+} else {
+  child.stdin.end(prompt);
+}
+
+const timeoutMs = Number(process.env.OPENCODE_RUN_TIMEOUT_MS || 240000);
+let timedOut = false;
+const timeout = timeoutMs > 0 ? setTimeout(() => {
+  timedOut = true;
+  child.kill();
+}, timeoutMs) : null;
 
 let text = "";
 let reasoning = "";
 let capturedSessionId = sessionId;
 let stderr = "";
 let buffer = "";
+let emittedText = false;
 
 function emit(record) {
   process.stdout.write(`${JSON.stringify(record)}\n`);
@@ -67,6 +101,7 @@ function handleLine(line) {
   if (event.type === "reasoning") reasoning += chunk;
   if (event.type === "text") {
     text += chunk;
+    emittedText = true;
     emit({ item: { type: "message", text: chunk }, ...(capturedSessionId ? { sessionID: capturedSessionId } : {}) });
   }
   if (event.type === "error") {
@@ -99,11 +134,19 @@ child.stderr.on("data", (chunk) => {
 });
 child.on("error", (error) => { console.error(error.message); process.exit(1); });
 child.on("close", (code) => {
+  if (timeout) clearTimeout(timeout);
   if (buffer) handleLine(buffer);
+  if (timedOut) {
+    console.error(`[opencode-cli] timed out after ${timeoutMs}ms`);
+    process.exit(124);
+    return;
+  }
   if (code !== 0 && !text) {
     console.error(stderr.trim() || `opencode exited with code ${code}`);
     process.exit(code || 1);
     return;
   }
-  emit({ item: { type: "message", text }, ...(capturedSessionId ? { sessionID: capturedSessionId } : {}) });
+  if (!emittedText && text) {
+    emit({ item: { type: "message", text }, ...(capturedSessionId ? { sessionID: capturedSessionId } : {}) });
+  }
 });

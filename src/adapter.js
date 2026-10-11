@@ -1,5 +1,23 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
+
+function normalizeModel(model) {
+  const value = String(model ?? "").trim();
+  if (!value) return value;
+  return value.replace(/^opencode\/opencode\//i, "opencode/");
+}
+
+function resolveOpenCodeCommand(explicit) {
+  if (explicit) return explicit;
+  if (process.platform !== "win32") return "opencode";
+  const npmRoot = process.env.APPDATA
+    ? path.join(process.env.APPDATA, "npm")
+    : path.join(process.env.USERPROFILE || "", "AppData", "Roaming", "npm");
+  const nativeBinary = path.join(npmRoot, "node_modules", "opencode-ai", "bin", "opencode.exe");
+  return fs.existsSync(nativeBinary) ? nativeBinary : "opencode.exe";
+}
 
 /**
  * Executes opencode run with structured JSON streaming output.
@@ -7,7 +25,7 @@ import readline from "node:readline";
  *
  * @param {Object} options
  * @param {string} options.prompt - The prompt text to send
- * @param {string} [options.model="opencode/mimo-v2.5-free"] - Model to use
+ * @param {string} [options.model="opencode/mimo-v2.6-flash-free"] - Model to use
  * @param {string} [options.sessionId] - Session ID to continue
  * @param {string} [options.workdir] - Working directory for the execution
  * @param {boolean} [options.thinking=true] - Whether to capture thinking blocks
@@ -17,12 +35,14 @@ import readline from "node:readline";
  */
 export async function runOpenCode({
   prompt,
-  model = "opencode/mimo-v2.5-free",
+  model = "opencode/mimo-v2.6-flash-free",
   sessionId,
   workdir = process.cwd(),
   thinking = true,
   onReasoning,
   onText,
+  timeoutMs = 240_000,
+  command,
 }) {
   return new Promise((resolve, reject) => {
     const args = ["run", "--format", "json"];
@@ -32,22 +52,38 @@ export async function runOpenCode({
     }
 
     if (model) {
-      args.push("-m", model);
+      args.push("-m", normalizeModel(model));
     }
 
     if (sessionId) {
       args.push("-s", sessionId);
     }
 
-    args.push(prompt);
-
-    const cmd = process.platform === "win32" ? "opencode.cmd" : "opencode";
+    // Spawn the native exe (no shell) to avoid flashing a cmd.exe window on Windows.
+    const cmd = resolveOpenCodeCommand(command);
     const child = spawn(cmd, args, {
       cwd: workdir,
-      env: { ...process.env },
-      shell: process.platform === "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        ...(process.platform === "win32" && process.env.USERPROFILE
+          ? { HOME: process.env.USERPROFILE }
+          : {}),
+        OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+      },
+      shell: false,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
     });
+
+    child.stdin.end(prompt);
+
+    let timedOut = false;
+    const timer = timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill();
+        }, timeoutMs)
+      : null;
 
     let fullText = "";
     let fullReasoning = "";
@@ -118,6 +154,10 @@ export async function runOpenCode({
     });
 
     child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (timedOut) {
+        return reject(new Error(`opencode timed out after ${timeoutMs}ms. Stderr: ${stderrOutput.trim()}`));
+      }
       if (code !== 0 && !fullText) {
         return reject(
           new Error(
