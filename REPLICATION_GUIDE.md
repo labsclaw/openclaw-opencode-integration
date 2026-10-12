@@ -1,81 +1,105 @@
-# Guia de Replicação para Agentes e Engenheiros: OpenClaw + OpenCode CLI
+# Guia Definitivo de Replicação: OpenClaw + OpenCode CLI (Sisyphus)
 
 <!-- project: github.com/labsclaw/openclaw-opencode-integration -->
 
-Este documento foi elaborado para que **outros modelos, agentes de codificação autônomos (Codex, Claude Code, Gemini CLI, OpenClaw Subagents) ou engenheiros de infraestrutura** possam reproduzir com 100% de fidelidade a integração do OpenCode CLI no OpenClaw em qualquer host limpo, contornando o bloqueio **HTTP 403 da Zen API**, habilitando raciocínio estendido (**thinking**) e satisfazendo o portão de controle de ferramentas (**exact-cap enforcement**) do OpenClaw.
+Este guia técnico documenta a arquitetura, configuração e operação para integrar o **OpenCode CLI** ao **OpenClaw** em qualquer ambiente limpo (Windows, Linux ou macOS).
+
+Esta solução contorna o bloqueio **HTTP 403 (FreeTierError)** do endpoint Zen, assegura execução via persona **Sisyphus - ultraworker** do pacote Oh-My-OpenAgent (OMO), implementa **guard fail-closed** contra tráfego HTTP desautorizado, e documenta o tratamento de seleção de modelos e pins de sessão no Gateway.
 
 ---
 
-## 📋 Pré-Requisitos do Host
+## 🎯 Diagnóstico da Causa Raiz: Por que o HTTP 403 Acontece?
 
-Antes de iniciar a configuração, valide se o ambiente possui os binários e permissões necessárias:
+Desde setembro de 2026, o endpoint Zen (`https://opencode.ai/zen/v1`) valida contextualmente se as requisições para modelos gratuitos (`mimo-v2.6-flash-free`, `big-pickle`, etc.) se originam de uma sessão interativa genuína do binário oficial `opencode`.
 
-1. **Node.js:** Versão 20.x ou superior (testado e validado em Node v26.1.0).
-2. **OpenCode CLI:** Versão 1.18.30 ou superior instalada e no `PATH` do sistema:
+Qualquer requisição HTTP direta de terceiros simulando cabeçalhos estáticos (`x-opencode-session`, `User-Agent`, etc.) é rejeitada:
+
+```json
+{
+  "type": "error",
+  "error": {
+    "type": "FreeTierError",
+    "message": "OpenCode's free tier can only be used from within OpenCode"
+  }
+}
+```
+
+A única via operacional para usufruir dos modelos gratuitos do ecossistema OpenCode é **executar as inferências diretamente pelo executável nativo do OpenCode CLI**.
+
+---
+
+## 🏗️ Arquitetura Híbrida
+
+A arquitetura adota o modelo híbrido validado:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                           OpenClaw Gateway                             │
+│                                                                        │
+│  1. Descoberta de Catálogo: models.providers.opencode (API Zen Oficial)│
+│  2. Provedor Guard Local:  src/zen-inference-guard.js                  │
+│     -> Intercepta wrapStreamFn e recusa HTTP (OPENCODE_CLI_ROUTE_REQUIRED)│
+│  3. Transporte de Execução: src/cli-backend.js                         │
+│     -> nativeToolMode: "always-on"                                     │
+│     -> parseJsonlEvent: streaming de deltas sem duplicação             │
+│  4. Wrapper de Processo:   src/opencode-cli-wrapper.js                 │
+│     -> Executa opencode.exe run --format json --agent "Sisyphus..."     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                       (Spawn de Processo Local)
+                                    ▼
+       ┌────────────────────────────────────────────────────────┐
+       │             OpenCode CLI (opencode.exe)                │
+       │                                                        │
+       │  Harness: Oh-My-OpenAgent (OMO)                        │
+       │  Persona: Sisyphus - ultraworker (primary)             │
+       │  Thinking / Reasoning: Capturado via streaming nativo  │
+       └────────────────────────────┬───────────────────────────┘
+                                    │
+                                    │ (Tráfego interno autorizado)
+                                    ▼
+                      Zen API (HTTP 200 OK)
+```
+
+### Componentes Principais:
+1. **`index.js`**: Ponto de entrada do plugin que registra simultaneamente o `cli-backend` de inferência e o provider guard `opencode`.
+2. **`openclaw.plugin.json`**: Manifesto declarando `cliBackends: ["opencode-cli"]`, `providers: ["opencode"]` e ativação em `onStartup: true`.
+3. **`src/cli-backend.js`**: Descritor de CLI backend registrado no OpenClaw com:
+   - `nativeToolMode: "always-on"` (declaração honesta: não finge controle exato de ferramentas do OpenClaw sobre ferramentas nativas do OpenCode).
+   - Hook público `parseJsonlEvent` para streaming incremental de texto (`opencode_text_delta`) e emissão de resultado final único com contagem de tokens.
+4. **`src/opencode-cli-wrapper.js`**:
+   - Execução direta do binário nativo `opencode.exe` (no Windows, sem shims `.cmd` que piscam console).
+   - Validação prévia de existência da persona primária `Sisyphus - ultraworker` (evita fallback silencioso do OpenCode para o agente `build`).
+   - Gerenciamento rigoroso de árvore de processos no Windows usando `taskkill /PID <pid> /T /F` no PID privado da instância, garantindo zero processos órfãos em timeouts ou cancelamentos.
+   - Streaming seguro em UTF-8 com buffer delimitado e parsing tolerante a chunks parciais.
+5. **`src/zen-inference-guard.js`**:
+   - Provider plugin local que intercepta chamadas hosted (`wrapStreamFn` e `wrapSimpleCompletionStreamFn`) e lança `OpenCodeInferenceRouteError` (`OPENCODE_CLI_ROUTE_REQUIRED`).
+   - Evita que qualquer sessão com pin incorreto ou fallback acidental tente vazar requisições para a API Zen via HTTP.
+
+---
+
+## 📋 Pré-Requisitos
+
+1. **Node.js:** Versão 20.x ou superior (testado em Node v26.1.0).
+2. **OpenCode CLI:** Versão 1.18.30+ instalada globalmente:
    ```bash
+   npm install -g opencode-ai
    opencode --version
    ```
-   *Certifique-se de que a autenticação do OpenCode já foi executada no host (`opencode auth login` ou credenciais ativas em `~/.opencode`).*
-3. **OpenClaw:** Versão 2026.3.24+ (testado em OpenClaw 2026.9.3).
-4. **Plugin ACPX Oficial:** Pacote `@openclaw/acpx` instalado no Gateway.
+3. **Oh-My-OpenAgent (OMO):** Plugin instalado no OpenCode fornecendo o Sisyphus:
+   ```bash
+   opencode plugin install oh-my-openagent
+   opencode agent list
+   ```
+   *Certifique-se de que `Sisyphus - ultraworker (primary)` aparece na listagem.*
+4. **OpenClaw:** Versão 2026.3.24+ (testado em 2026.9.9).
 
 ---
 
-## 🎯 Diagnóstico da Causa Raiz (Por que o 403 acontece?)
+## 🚀 Passo a Passo de Instalação e Configuração
 
-Se o OpenClaw tentar chamar `https://opencode.ai/zen/v1` via requisição HTTP direta simulando headers estáticos (`x-opencode-session`, `x-opencode-project`, `User-Agent: opencode/...`), a API Zen rejeita com:
-
-```
-HTTP 403: OpenCode's free tier can only be used from within OpenCode
-```
-
-**Solução de Arquitetura:**
-- O tráfego precisa ser executado por dentro do runtime oficial do binário `opencode`.
-- A integração disponibiliza duas vias oficiais:
-  - **Rota A (Harness ACP):** Servidor ACP nativo (`opencode acp`) para sessões interativas e comandos de código.
-  - **Rota B (CLI Backend + Wrapper):** Processo headless intermediado por `src/opencode-cli-wrapper.js` (`opencode run --format json --thinking`) para atuar como provedor de inferência na cadeia de fallback do OpenClaw.
-
----
-
-## 🏗️ Arquitetura dos Componentes
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    OpenClaw Gateway                         │
-│                                                             │
-│  ┌───────────────────────────┐ ┌──────────────────────────┐ │
-│  │     Rota A: ACP Harness   │ │   Rota B: CLI Backend    │ │
-│  │   (stdio JSON-RPC 2.0)    │ │   (opencode-cli-wrapper) │ │
-│  └─────────────┬─────────────┘ └────────────┬─────────────┘ │
-└────────────────┼────────────────────────────┼───────────────┘
-                 │                            │
-                 ▼                            ▼
-      ┌──────────────────────┐   ┌──────────────────────────┐
-      │     opencode acp     │   │   opencode.cmd run       │
-      │  (Interactive Agent) │   │   --format json          │
-      │                      │   │   --thinking             │
-      └──────────┬───────────┘   └────────────┬─────────────┘
-                 │                            │
-                 └──────────────┬─────────────┘
-                                ▼
-                   Zen API (HTTP 200 Authorized)
-```
-
-### Arquivos do Repositório:
-- `index.js`: Ponto de entrada do plugin usando `definePluginEntry` do SDK OpenClaw.
-- `openclaw.plugin.json`: Manifesto com `onStartup: true` para registro automático no boot do Gateway.
-- `src/cli-backend.js`: Descritor canônico do CLI backend registrado via `api.registerCliBackend(...)` com suporte a `exact-cap`.
-- `src/opencode-cli-wrapper.js`: Wrapper que executa o `opencode run`, faz stream de eventos JSON para JSONL nativo do OpenClaw, captura `reasoning` (thinking), emite contagem de tokens e trata erros de rate-limit.
-- `src/acp-harness.js`: Cliente JSON-RPC 2.0 para comunicação stdio com `opencode acp`.
-- `src/adapter.js`: Conector de streaming SSE e medição de tokens/custo.
-- `test/test-adapter.js` & `test/test-acp.js`: Testes de bancada e handshake.
-
----
-
-## 🚀 Passo a Passo de Replicação
-
-### Passo 1: Clonar o Repositório de Integração
-No diretório de plugins ou workspace do OpenClaw:
+### 1. Clonar o Repositório
+No diretório de plugins do seu workspace OpenClaw:
 
 ```bash
 cd ~/.openclaw/workspace
@@ -83,42 +107,34 @@ git clone https://github.com/labsclaw/openclaw-opencode-integration.git
 cd openclaw-opencode-integration
 ```
 
-### Passo 2: Registro do Plugin no Gateway
-Vincule o plugin à pasta `plugins` do OpenClaw ou configure o caminho de carregamento:
+### 2. Configurar o `openclaw.json`
 
-```bash
-# Opção A: Carregamento via pasta plugins
-cp -r ~/.openclaw/workspace/openclaw-opencode-integration ~/.openclaw/plugins/opencode-cli
+Edite o arquivo global `~/.openclaw/openclaw.json` (ou `%USERPROFILE%\.openclaw\openclaw.json`):
 
-# Opção B: Apontar diretamente no openclaw.json
-```
-
-### Passo 3: Configuração do `openclaw.json`
-
-Edite o arquivo de configuração global do Gateway (`~/.openclaw/openclaw.json` ou `%USERPROFILE%\.openclaw\openclaw.json`):
-
-#### 3.1. Carregamento do Plugin
-Garanta que o plugin `opencode-cli` esteja na lista de carregamento:
-
+#### A. Carregar o Plugin
 ```json
 {
   "plugins": {
     "load": {
       "paths": [
-        "plugins/opencode-cli"
+        "C:\\Users\\ClawLabs\\.openclaw\\workspace\\openclaw-opencode-integration"
       ]
     },
     "entries": {
       "opencode-cli": {
         "enabled": true
+      },
+      "opencode": {
+        "enabled": false
       }
     }
   }
 }
 ```
+*(Nota: O plugin oficial legado `opencode` deve ficar `enabled: false` para evitar conflito de registro com o guard local).*
 
-#### 3.2. Limpar Headers Legados do Provider OpenCode
-No objeto `models.providers.opencode`, **remova** todos os headers estáticos de spoofing (`x-opencode-*`) e mantenha apenas cabeçalhos genéricos:
+#### B. Configurar o Provider `opencode`
+No bloco `models.providers.opencode`, vincule o `agentRuntime` no nível do provedor:
 
 ```json
 {
@@ -127,54 +143,15 @@ No objeto `models.providers.opencode`, **remova** todos os headers estáticos de
       "opencode": {
         "baseUrl": "https://opencode.ai/zen/v1",
         "api": "openai-completions",
+        "agentRuntime": {
+          "id": "opencode-cli"
+        },
         "headers": {
-          "Accept": "application/json"
-        }
-      }
-    }
-  }
-}
-```
-
-#### 3.3. Configurar o Bloco ACP Oficial (Rota A)
-Adicione ou atualize a seção raiz `acp` para permitir o backend `acpx` e o agente `opencode`:
-
-```json
-{
-  "acp": {
-    "enabled": true,
-    "dispatch": {
-      "enabled": true
-    },
-    "backend": "acpx",
-    "defaultAgent": "codex",
-    "allowedAgents": [
-      "claude",
-      "codex",
-      "gemini",
-      "opencode"
-    ],
-    "stream": {
-      "deliveryMode": "live"
-    }
-  }
-}
-```
-
-#### 3.4. Adicionar Modelos na Cadeia de Fallback (Rota B)
-Adicione `opencode/big-pickle` ou `opencode/mimo-v2.5-free` na lista de fallbacks de `agents.defaults.model.fallbacks`:
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "antigravity-proxy/gemini-3.8-flash-high",
-        "fallbacks": [
-          "opencode/big-pickle",
-          "opencode/mimo-v2.5-free",
-          "kilocode/nvidia/nemotron-3-ultra-550b-a55b:free",
-          "openrouter/deepseek/deepseek-v4-flash:free"
+          "Accept": "*/*"
+        },
+        "models": [
+          { "id": "mimo-v2.6-flash-free", "name": "mimo-v2.6-flash-free", "contextWindow": 200000 },
+          { "id": "big-pickle", "name": "Big Pickle", "reasoning": true, "contextWindow": 200000 }
         ]
       }
     }
@@ -182,68 +159,115 @@ Adicione `opencode/big-pickle` ou `opencode/mimo-v2.5-free` na lista de fallback
 }
 ```
 
+#### C. Configurar a Precedência de Runtime nos Agentes
+Em `agents.defaults.models` e `agents.entries.main.models`, declare o wildcard `opencode/*` apontando para o CLI:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "models": {
+        "opencode/*": {
+          "agentRuntime": {
+            "id": "opencode-cli"
+          }
+        }
+      }
+    },
+    "entries": {
+      "main": {
+        "models": {
+          "opencode/*": {
+            "agentRuntime": {
+              "id": "opencode-cli"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+#### D. Validar a Configuração
+```bash
+openclaw config validate
+```
+
 ---
 
-## 🧪 Passo 4: Testes de Bancada e Validação
+## ⚡ Tratamento Crítico de Sessão e Picker Telegram
 
-Antes de colocar o Gateway em produção, execute a bateria de testes de validação:
-
-### 1. Testar o Wrapper CLI Direto
-```bash
-node src/opencode-cli-wrapper.js --thinking --model opencode/big-pickle "say OK only"
+### O Problema do Pin de Sessão (`agentRuntimeOverride`)
+Nas sessões existentes do Telegram (`agent:main:main`), o OpenClaw armazena no SQLite o estado da sessão:
+```json
+"agentRuntimeOverride": "openclaw"
 ```
-*Critério de Sucesso:*
-- Linhas JSON emitidas no formato `{"item":{"type":"message","text":"OK"},...}`
-- Evento `{"usage":{...}}` com a contagem de tokens.
-- Código de saída `0`.
+Ao usar o menu `/models` no Telegram para trocar de modelo, o callback do Telegram envia `runtime: "unchanged"`. Isso faz com que o OpenClaw **preserve** o pin anterior (`openclaw`). Sob esse pin, o Gateway ignora a política do `openclaw.json` e tenta realizar inferência HTTP tradicional, caindo no **HTTP 403**.
 
-### 2. Testar a Rota B (CLI Backend + Reasoning)
-```bash
-node test/test-adapter.js
+### Como Limpar o Pin Corretamente
+Para limpar o pin da sessão e herdar a política configurada (`opencode-cli`):
+
+```text
+/model opencode/mimo-v2.6-flash-free --runtime default -s
 ```
-*Critério de Sucesso:*
-- Output do reasoning impresso via `[REASONING] ...`
-- Texto final emitido sem erro 403
-- Métricas de tokens capturadas e custo informado $0.
 
-### 3. Testar a Rota A (ACP Harness Handshake)
+- `--runtime default`: Gera uma diretiva `{ kind: "clear" }` no resolvedor do Gateway, removendo o pin da sessão.
+- `-s`: Aplica a alteração especificamente para a sessão corrente.
+
+> ⚠️ **Importante:** Nunca utilize `/model ... --runtime opencode-cli -s`. No OpenClaw, a flag `--runtime` do comando `/model` aceita apenas IDs de Agent Harnesses (como `openclaw` ou `codex`). Como `opencode-cli` é um CLI Backend, passar esse nome gerará o erro:  
+> `Runtime "opencode-cli" is not available for opencode/...`
+
+---
+
+## 🧪 Suíte de Testes Offline e Validação
+
+A integração conta com uma suíte de testes 100% offline (utiliza mocks estruturados e testes de seam sem disparar chamadas de rede ou inferências pagas):
+
 ```bash
-node test/test-acp.js
-```
-*Critério de Sucesso:*
-- Subprocesso `opencode acp` iniciado
-- Handshake `initialize` respondido com `protocolVersion: 1`
-- Sessão criada com `sessionId: ses_...` e catálogo dinâmico retornado.
+cd openclaw-opencode-integration
 
-### 4. Testar Endpoint de Inferência via Proxy
+# 1. Validação estrutural e sintaxe
+node scripts/verify-plugin.mjs
+
+# 2. Testes de Seam: Guard e Picker
+node --test test/test-zen-inference-guard.mjs test/test-telegram-picker-seam.mjs
+
+# 3. Testes do Backend, Wrapper, Streaming e Fallback
+node --test test/test-cli-backend-offline.mjs test/test-zen-fallback-scope.mjs test/test-cli-wrapper.mjs
+```
+
+**Resultado esperado:**
+- `verify-plugin.mjs`: `0 error(s), 0 note(s)`.
+- Testes automatizados: **83 testes executados e aprovados** (0 falhas).
+
+---
+
+## 🔄 Reinicialização Segura do Gateway
+
+No Windows, o OpenClaw Gateway é gerenciado por Scheduled Task nativa. Para reiniciar com segurança:
+
 ```powershell
-$body = '{"model":"opencode/big-pickle","messages":[{"role":"user","content":"say OK only"}]}';
-Invoke-RestMethod -Uri 'http://127.0.0.1:18790/v1/chat/completions' -Method Post -ContentType 'application/json' -Body $body
+openclaw gateway restart --safe
 ```
+
+*Verificação de status pós-reinício:*
+```powershell
+openclaw gateway status
+openclaw plugins inspect opencode-cli
+```
+Deverá exibir:
+- `Status: enabled`
+- `Capabilities: cli-backend: opencode-cli, opencode-cli` e `text-inference: opencode`.
 
 ---
 
-## 🔄 Passo 5: Reinicialização do Serviço
+## 🛠️ Resumo de Troubleshooting
 
-Para que o Gateway instancie os listeners, plugins e despachantes do ACP:
-
-```bash
-pm2 restart openclaw-gateway
-# ou: systemctl restart openclaw-gateway
-```
-
-*Nota de Segurança para Agentes Autônomos: Nunca execute o restart do Gateway de dentro de uma sessão interativa usando chamadas de shell direta `exec`, pois isso interrompe o processo pai do WebSocket/Telegram abruptamente.*
-
----
-
-## 🛠️ Matriz de Resolução de Problemas (Troubleshooting)
-
-| Sintoma / Erro | Causa Provável | Solução |
+| Erro / Comportamento | Causa | Solução |
 | :--- | :--- | :--- |
-| `HTTP 403: OpenCode's free tier can only be used from within OpenCode` | Requisição HTTP direta feita sem o CLI ou headers legados presentes | Usar o conector `src/adapter.js` ou CLI backend (`src/opencode-cli-wrapper.js`). Limpar headers em `openclaw.json`. |
-| `cannot enforce exact tool cap on CLI backend` | `nativeToolMode` ou `toolAvailabilityEnforcement` ausente no backend descriptor | Configurar `nativeToolMode: "selectable"`, `toolAvailabilityEnforcement: "execution-args"` e função `resolveExecutionArgs` em `cli-backend.js`. |
-| `ACP Error [-32602]: Invalid params` | Handshake `initialize` do ACP enviado sem `protocolVersion: 1` | Garantir que o payload JSON-RPC contenha `protocolVersion: 1` e `clientCapabilities`. |
-| `spawn opencode ENOENT` no Windows | O Node.js não encontrou o executável `.cmd` no PATH do Windows | Utilizar `opencode.cmd` no Windows e `shell: true` na chamada de spawn. |
-| Terminais/janelas abrindo sem parar | Chamada de `spawn` sem `windowsHide: true` | Adicionar `windowsHide: true` nas opções de `spawn` em `src/opencode-cli-wrapper.js`. |
-| Reasoning não aparece na resposta | Falta da flag `--thinking` | Adicionar `--thinking` e `--format json` nos argumentos de chamada do `opencode run`. |
-
+| `HTTP 403 FreeTierError` no Telegram | Sessão presa com `agentRuntimeOverride: "openclaw"` | Executar `/model opencode/<modelo> --runtime default -s` |
+| `Runtime "opencode-cli" is not available` | Passou `--runtime opencode-cli` no comando `/model` | Usar `--runtime default` para herdar a política configurada |
+| `OPENCODE_CLI_ROUTE_REQUIRED` | O inference guard interceptou uma chamada que tentou ir via HTTP | Normal e esperado: confirma que o guard impediu o vazamento para o Zen |
+| Subprocesso CLI dá timeout de 180s | Modelo offline ou erro de servidor na API externa do OpenCode | Testar via terminal com `opencode run -m <modelo> "ping"` |
+| Plugin não recarrega no Windows (`EPERM`) | Symlinks temporários bloqueados pelo SO | Fazer `openclaw gateway restart --safe` em vez de reload via CLI |
