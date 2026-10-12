@@ -74,7 +74,7 @@ function killTree(child) {
   // Never use /IM: only the tree rooted at the private CLI PID. No --attach is allowed.
   return new Promise((resolve, reject) => {
     const killer = spawn(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", shell: false });
-    const deadline = setTimeout(() => { killer.kill(); reject(new Error("owned tree cleanup timed out")); }, 3000);
+    const deadline = setTimeout(() => { killer.kill(); reject(new Error("owned tree cleanup timed out")); }, 6000);
     killer.on("error", (error) => { clearTimeout(deadline); reject(error); });
     killer.on("close", (code) => {
       clearTimeout(deadline);
@@ -101,7 +101,7 @@ function abort(error) {
 for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) process.on(signal, () => abort(fail(code, "cancelled by " + signal)));
 process.stdout.on("error", () => abort(fail(143, "output consumer disconnected")));
 
-function execute(args, onLine, { preflight = false, options } = {}) {
+function execute(args, onLine, { preflight = false, prompt = "" } = {}) {
   return new Promise((resolve, reject) => {
     if (terminal) { reject(terminal); return; }
     const child = spawn(script ? process.execPath : binary, script ? [binary, ...args] : args, { cwd: process.cwd(), env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
@@ -150,23 +150,10 @@ function execute(args, onLine, { preflight = false, options } = {}) {
       if (code !== 0) { reject(fail(preflight ? EXIT.agent : EXIT.child, "OpenCode exited " + (signal || code) + (stderr.trim() ? ": " + stderr.trim() : ""))); return; }
       resolve();
     });
-    if (preflight) child.stdin.end();
-    else if (options.prompt !== undefined) { hasInput = true; child.stdin.end(options.prompt); }
-    else {
-      stdinListener = (chunk) => {
-        inputBytes += chunk.length;
-        if (inputBytes > LIMIT.prompt || chunk.includes(0)) { abort(fail(EXIT.args, "stdin prompt limit exceeded or NUL byte")); return; }
-        if (chunk.toString("utf8").trim()) hasInput = true;
-        if (!child.stdin.write(chunk)) process.stdin.pause();
-      };
-      child.stdin.on("drain", () => { if (!terminal) process.stdin.resume(); });
-      process.stdin.on("data", stdinListener);
-      process.stdin.once("end", () => {
-        if (!hasInput) abort(fail(EXIT.args, "requires a nonempty prompt"));
-        else child.stdin.end();
-      });
-      process.stdin.on("error", (e) => abort(fail(EXIT.args, "stdin failed: " + e.message)));
-      process.stdin.resume();
+    if (preflight) {
+      child.stdin.end();
+    } else {
+      child.stdin.end(prompt);
     }
   });
 }
@@ -176,7 +163,21 @@ async function main() {
   const timeoutMs = Number(process.env.OPENCODE_RUN_TIMEOUT_MS ?? 240000);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw fail(EXIT.args, "invalid OPENCODE_RUN_TIMEOUT_MS");
   if (!script && /\.(cmd|bat|ps1)$/i.test(binary)) throw fail(EXIT.args, "OPENCODE_BIN must be native (no shell shim)");
-  if (options.prompt === undefined && process.stdin.isTTY) throw fail(EXIT.args, "requires a prompt on stdin");
+
+  let prompt = options.prompt;
+  if (prompt === undefined) {
+    if (process.stdin.isTTY) throw fail(EXIT.args, "requires a prompt on stdin");
+    const chunks = [];
+    let totalBytes = 0;
+    for await (const chunk of process.stdin) {
+      totalBytes += chunk.length;
+      if (totalBytes > LIMIT.prompt || chunk.includes(0)) throw fail(EXIT.args, "stdin prompt limit exceeded or NUL byte");
+      chunks.push(chunk);
+    }
+    prompt = Buffer.concat(chunks).toString("utf8");
+    if (!prompt.trim()) throw fail(EXIT.args, "requires a nonempty prompt");
+  }
+
   timer = setTimeout(() => abort(fail(EXIT.timeout, "timed out after " + timeoutMs + "ms")), timeoutMs);
   if (options.agent) {
     let found = false;
@@ -246,8 +247,7 @@ async function main() {
       if (typeof event.part.cost === "number" && Number.isFinite(event.part.cost) && event.part.cost >= 0) cost = (cost || 0) + event.part.cost;
     }
   }
-  await execute(cliArgs, onLine, { options });
-  if (!hasInput) throw fail(EXIT.args, "requires a nonempty prompt");
+  await execute(cliArgs, onLine, { prompt });
   if (!text.trim()) throw fail(EXIT.protocol, "OpenCode returned no assistant text");
   if (!finished) throw fail(EXIT.protocol, "OpenCode ended without a terminal step_finish");
   if (!session) throw fail(EXIT.protocol, "OpenCode returned no session ID");
