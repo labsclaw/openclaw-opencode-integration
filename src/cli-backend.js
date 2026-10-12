@@ -18,11 +18,9 @@ export function buildOpenCodeCliBackend() {
         binaryName: "opencode",
       },
     },
-    // Exact-cap support: OpenClaw only starts runs with cliToolAvailability when
-    // nativeToolMode=selectable AND (execution-args + resolveExecutionArgs | prepare-execution + prepareExecution).
-    // See dist/prepare.runtime-DzcFgqD8.mjs canEnforceExactToolAvailability.
-    nativeToolMode: "selectable",
-    toolAvailabilityEnforcement: "execution-args",
+    // OpenCode owns its tools/permissions; this adapter cannot impose an exact cap.
+    // OpenClaw's admission gate must reject disableTools/restricted tool lists.
+    nativeToolMode: "always-on",
     config: {
       command: "node",
       args: [
@@ -48,35 +46,40 @@ export function buildOpenCodeCliBackend() {
       sessionIdFields: ["sessionID", "sessionId"],
       serialize: true,
     },
+    // Public OpenClaw custom JSONL seam; does not project native tools into OpenClaw.
+    parseJsonlEvent(line) {
+      const record = JSON.parse(line);
+      const session = typeof record.sessionID === "string" ? [{ kind: "sessionId", sessionId: record.sessionID }] : [];
+      if (record.item?.type === "opencode_text_delta" && typeof record.item.text === "string") {
+        return [...session, { kind: "text", text: record.item.text }];
+      }
+      if (record.item?.type === "message" && typeof record.item.text === "string") {
+        return { kind: "result", text: record.item.text, sessionId: record.sessionID, usage: record.usage };
+      }
+      if (record.type === "error") {
+        return { kind: "result", text: "", errorText: typeof record.error === "string" ? record.error : "OpenCode wrapper failed" };
+      }
+      return null;
+    },
     resolveExecutionArgs(ctx) {
+      if (ctx.toolAvailability !== undefined || ctx.executionMode === "side-question") {
+        throw new Error("OpenCode CLI cannot enforce restricted/side-question tool availability; run not started");
+      }
+      const level = String(ctx.thinkingLevel ?? "").toLowerCase();
+      const off = level === "off";
+      const alwaysOn = ["always on", "always-on", "always_on"].includes(level);
       const args = [];
       const baseArgs = [...ctx.baseArgs];
       for (let index = 0; index < baseArgs.length; index += 1) {
         const arg = baseArgs[index];
         if (arg === "--thinking") continue;
-        if (arg === "--variant") {
-          index += 1;
-          continue;
-        }
+        if (arg === "--variant" && (off || alwaysOn)) { index += 1; continue; }
         args.push(arg);
       }
-      const level = String(ctx.thinkingLevel ?? "high").toLowerCase();
-      // Mimo v2.6 exposes a boolean "always on" thinking mode rather than a
-      // provider variant. Passing --variant high makes the CLI/backend reject
-      // the request before inference starts.
-      if (level === "always on" || level === "always-on" || level === "always_on") {
-        args.push("--thinking");
-        return args;
-      }
-      const variant = ["minimal", "low", "medium", "high", "xhigh", "max"].includes(level)
-        ? (level === "minimal" ? "low" : level === "xhigh" || level === "max" ? "high" : level)
-        : "high";
-      args.push("--thinking", "--variant", variant);
-      // OpenCode `opencode run` has no per-run tool allowlist flags (unlike Claude
-      // --allowedTools). This backend does not bundle OpenClaw MCP tools, so the
-      // openClaw half of toolAvailability is not projected into the child process.
-      // Returning a non-null arg list satisfies OpenClaw's exact-cap gate; native
-      // opencode tools remain whatever the installed CLI exposes.
+      // --thinking only displays reasoning; it does not guarantee reasoning is disabled
+      // by "off". Never infer --variant high from an OpenClaw thinking level: supported
+      // variants are provider/model specific. An explicit base variant stays verbatim.
+      if (!off && (baseArgs.includes("--thinking") || level)) args.push("--thinking");
       return args;
     },
   };

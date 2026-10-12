@@ -2,6 +2,7 @@
   "id": "opencode-cli",
   "name": "OpenCode CLI Backend",
   "description": "CLI backend routing the existing opencode provider through the local OpenCode CLI (no direct Zen inference call).",
+  "providers": ["opencode"],
   "cliBackends": [
     "opencode-cli"
   ],
