@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 const args = process.argv.slice(2);
 const mode = process.env.FIXTURE_MODE || "normal";
 function trace(record) { if (process.env.FIXTURE_TRACE) fs.appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify(record) + "\n"); }
-trace({ args, pid: process.pid });
+trace({ args, pid: process.pid, config: JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || "{}"), autoUpdateDisabled: process.env.OPENCODE_DISABLE_AUTOUPDATE });
+if (mode === "silent") await new Promise(resolve => setTimeout(resolve, 180));
 const emit = (e, newline = true) => process.stdout.write(JSON.stringify(e) + (newline ? "\n" : ""));
 const text = (value, extra = {}) => emit({ type: "text", sessionID: "ses_main", part: { text: value }, ...extra });
 if (args[0] === "loop") { setInterval(() => {}, 1000); }
@@ -45,8 +46,9 @@ else if (args[0] === "agent") {
     case "nonmonotonic": text("hello", { part: { id: "p", text: "hello" } }); text("different", { part: { id: "p", text: "different" } }); break;
     case "sessionMismatch": text("secret", { sessionID: "ses_other" }); text("ok"); emit({type:"step_finish",sessionID:"ses_main",part:{reason:"stop"}}); break;
     case "badUsage": text("ok"); emit({ type: "step_finish", part: { tokens: { input: -1 } } }); break;
+    case "silentTree":
     case "timeout":
-      text("partial");
+      if (mode === "timeout") text("partial");
       { const desc = spawn(process.execPath, [fileURLToPath(import.meta.url), "loop"], { env: process.env, stdio: "ignore", windowsHide: true }); trace({ descendant: desc.pid }); }
       setInterval(() => {}, 1000); break;
     case "unicode": {

@@ -3,9 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { StringDecoder } from "node:string_decoder";
+import { killOwnedTree, attachCleanupFailure } from "./opencode-cli-process.js";
 
 // Flat opencode run --format json events, not SDK/SSE. See docs/cli-wrapper.md.
-const EXIT = { args: 2, event: 65, quota: 66, protocol: 67, agent: 68, child: 69, cleanup: 70, timeout: 124, spawn: 127 };
+const EXIT = { args: 2, event: 65, quota: 66, protocol: 67, agent: 68, child: 69, timeout: 124, spawn: 127 };
 const LIMIT = { line: 1024 * 1024, stdout: 16 * 1024 * 1024, stderr: 8 * 1024 * 1024, tail: 16384, text: 4 * 1024 * 1024, prompt: 16 * 1024 * 1024, parts: 4096, events: 100000 };
 const quota = /free usage exceeded|rate.?limit|quota exceeded|subscribe to Go|retrying in \d+h/i;
 const fallback = /agent[^\r\n]*(?:not found|unknown|does not exist|not a primary)|fall(?:ing)? back[^\r\n]*(?:agent|build)/i;
@@ -50,52 +51,37 @@ const nativeBinary = path.join(npmRoot, "node_modules", "opencode-ai", "bin", "o
 const binary = process.env.OPENCODE_BIN || (process.platform === "win32" && fs.existsSync(nativeBinary) ? nativeBinary : "opencode");
 // .js/.mjs/.cjs is an explicit shell-free executable seam for offline Node fixtures.
 const script = /\.(?:mjs|cjs|js)$/i.test(binary);
-const env = { ...process.env, ...(process.platform === "win32" && process.env.USERPROFILE ? { HOME: process.env.USERPROFILE } : {}), OPENCODE_DISABLE_PROJECT_CONFIG: "true" };
+const env = { ...process.env, ...(process.platform === "win32" && process.env.USERPROFILE ? { HOME: process.env.USERPROFILE } : {}), OPENCODE_DISABLE_PROJECT_CONFIG: "true", OPENCODE_DISABLE_AUTOUPDATE: "true" };
 if (process.platform === "win32") { delete env.PWD; delete env.OLDPWD; }
 let active;
 let terminal;
 let timer;
+let heartbeatTimer;
+let heartbeatMs;
+let phase;
+function stopHeartbeat() { clearInterval(heartbeatTimer); heartbeatTimer = undefined; }
 let cleanupPromise = Promise.resolve();
 let stdinListener;
-let inputBytes = 0;
-let hasInput = false;
 function stopInput() {
   if (stdinListener) process.stdin.removeListener("data", stdinListener);
   process.stdin.pause();
 }
-function killTree(child) {
-  if (!child?.pid) return Promise.resolve();
-  // On Windows an exited root is no longer a safe ownership handle (PID reuse).
-  if (process.platform === "win32" && (child.exitCode !== null || child.signalCode !== null)) return Promise.resolve();
-  if (process.platform !== "win32") {
-    try { process.kill(-child.pid, "SIGKILL"); } catch (e) { if (e.code !== "ESRCH") return Promise.reject(e); }
-    return Promise.resolve();
-  }
-  // Never use /IM: only the tree rooted at the private CLI PID. No --attach is allowed.
-  return new Promise((resolve, reject) => {
-    const killer = spawn(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", shell: false });
-    const deadline = setTimeout(() => { killer.kill(); reject(new Error("owned tree cleanup timed out")); }, 6000);
-    killer.on("error", (error) => { clearTimeout(deadline); reject(error); });
-    killer.on("close", (code) => {
-      clearTimeout(deadline);
-      if (code === 0 || child.exitCode !== null || child.signalCode !== null) resolve();
-      else reject(new Error("taskkill could not terminate owned process tree (" + code + ")"));
-    });
-  });
-}
 function abort(error) {
   if (terminal) return;
   terminal = error;
+  stopHeartbeat();
   stopInput();
   if (active) {
     const owned = active;
     owned.stdin.destroy();
-    cleanupPromise = killTree(owned).catch((e) => {
-      terminal = fail(EXIT.cleanup, "owned tree cleanup failed: " + e.message);
+    cleanupPromise = killOwnedTree(owned).catch((e) => {
+      attachCleanupFailure(terminal, e);
       // Root-only last resort, never process-name/shared-server kill. Report failure,
       // not a claim that descendants were reaped when OS tree cleanup was unavailable.
-      owned.kill("SIGKILL"); owned.stdout.destroy(); owned.stderr.destroy();
-    });
+      if (owned.exitCode === null && owned.signalCode === null) {
+        try { owned.kill("SIGKILL"); } catch (rootError) { attachCleanupFailure(terminal, rootError); }
+      }
+    }).finally(() => { owned.stdout.destroy(); owned.stderr.destroy(); });
   }
 }
 for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) process.on(signal, () => abort(fail(code, "cancelled by " + signal)));
@@ -104,6 +90,10 @@ process.stdout.on("error", () => abort(fail(143, "output consumer disconnected")
 function execute(args, onLine, { preflight = false, prompt = "" } = {}) {
   return new Promise((resolve, reject) => {
     if (terminal) { reject(terminal); return; }
+    phase = preflight ? "preflight" : "inference";
+    const heartbeat = () => emit({ item: { type: "opencode_progress", phase } });
+    heartbeat();
+    heartbeatTimer = setInterval(heartbeat, heartbeatMs);
     const child = spawn(script ? process.execPath : binary, script ? [binary, ...args] : args, { cwd: process.cwd(), env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
     active = child;
     let buffer = "", stderr = "", outBytes = 0, errBytes = 0;
@@ -139,6 +129,7 @@ function execute(args, onLine, { preflight = false, prompt = "" } = {}) {
     child.stdin.on("error", (e) => { if (!terminal && e.code !== "EPIPE") abort(fail(EXIT.child, "stdin failed: " + e.message)); });
     child.on("error", (e) => abort(fail(EXIT.spawn, "cannot spawn OpenCode: " + e.message)));
     child.on("close", async (code, signal) => {
+      stopHeartbeat();
       stopInput();
       try {
         if (!terminal) { consume(decoder.decode()); if (buffer.trim()) onLine(buffer.trim()); }
@@ -160,6 +151,15 @@ function execute(args, onLine, { preflight = false, prompt = "" } = {}) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  let config = {};
+  if (env.OPENCODE_CONFIG_CONTENT !== undefined) {
+    try { config = JSON.parse(env.OPENCODE_CONFIG_CONTENT); } catch { throw fail(EXIT.args, "OPENCODE_CONFIG_CONTENT must be a valid JSON object"); }
+    if (!config || typeof config !== "object" || Array.isArray(config)) throw fail(EXIT.args, "OPENCODE_CONFIG_CONTENT must be a valid JSON object");
+  }
+  // Override only runtime hazards, preserving plugin/persona/provider configuration.
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...config, snapshot: false, ...(options.model ? { small_model: options.model } : {}) });
+  heartbeatMs = Number(process.env.OPENCODE_HEARTBEAT_INTERVAL_MS ?? 15000);
+  if (!Number.isSafeInteger(heartbeatMs) || heartbeatMs < 1 || heartbeatMs > 60000) throw fail(EXIT.args, "invalid OPENCODE_HEARTBEAT_INTERVAL_MS (1..60000)");
   const timeoutMs = Number(process.env.OPENCODE_RUN_TIMEOUT_MS ?? 240000);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw fail(EXIT.args, "invalid OPENCODE_RUN_TIMEOUT_MS");
   if (!script && /\.(cmd|bat|ps1)$/i.test(binary)) throw fail(EXIT.args, "OPENCODE_BIN must be native (no shell shim)");
@@ -178,7 +178,7 @@ async function main() {
     if (!prompt.trim()) throw fail(EXIT.args, "requires a nonempty prompt");
   }
 
-  timer = setTimeout(() => abort(fail(EXIT.timeout, "timed out after " + timeoutMs + "ms")), timeoutMs);
+  timer = setTimeout(() => abort(fail(EXIT.timeout, "timed out during " + phase + " after " + timeoutMs + "ms")), timeoutMs);
   if (options.agent) {
     let found = false;
     await execute(["agent", "list"], (line) => { if (line === options.agent + " (primary)" || line === options.agent + " (all)") found = true; }, { preflight: true });
@@ -260,4 +260,4 @@ try { await main(); } catch (e) {
   emit({ type: "error", error: message, exitCode: code });
   console.error("[opencode-cli] " + message);
   process.exitCode = code;
-} finally { if (timer) clearTimeout(timer); stopInput(); }
+} finally { if (timer) clearTimeout(timer); stopHeartbeat(); stopInput(); }

@@ -10,6 +10,12 @@ Supported wrapper flags: --thinking, --model, --agent, --session, --variant, and
 
 Bare model names receive opencode/; the known doubled opencode/opencode/ prefix is collapsed once. Other qualified providers, including nested model IDs such as openrouter/anthropic/model, remain unchanged. Syntax validation does not promise catalog availability or authentication. CLI errors remain terminal. Variants are provider-specific: explicit variants are preserved, never clamped from max/minimal to high. No variant is guessed from OpenClaw thinking levels. Off removes --thinking display and --variant, but cannot promise the provider internally stops reasoning; --thinking means display blocks. Always-on thinking mode drops an explicit variant.
 
+## Per-child configuration and liveness
+
+The wrapper parses `OPENCODE_CONFIG_CONTENT` as a JSON object before any spawn. Invalid JSON, null, arrays and scalars fail with code 2 without logging the supplied content. Existing keys (including plugins, agent/persona and provider settings) are retained. Only `snapshot:false` is forced, and an explicit normalized `--model` also sets `small_model` to the same model to avoid an inaccessible automatic title model. Without `--model`, an existing small_model is retained. Overrides affect only subprocess environment, never global config files. `OPENCODE_DISABLE_AUTOUPDATE=true` prevents startup updates; plugins including Sisyphus remain enabled.
+
+Every preflight/inference spawn emits `item.type=opencode_progress` with only its phase, immediately and every 15 seconds. `OPENCODE_HEARTBEAT_INTERVAL_MS` may set a validated 1..60000 ms interval. These JSONL bytes keep the no-output watchdog alive; the descriptor and generic JSONL parser ignore them (no assistant text, usage or session binding). Heartbeats are liveness, not evidence of model progress. Timers stop on child close, abort and wrapper completion. The independent `OPENCODE_RUN_TIMEOUT_MS` deadline (default 240000 ms, including preflight) still terminates genuinely stuck calls with code 124 and a phase-specific error.
+
 ## Input and sessions
 
 Both positional and streamed prompts are delivered **once via stdin**, never repeated in argv. Long Unicode/multiline input is forwarded byte-for-byte with backpressure and a 16 MiB bound. No temporary prompt files. Resume forwards only the caller's supplied payload and exact ses_* session ID; no global continue or wrapper-generated transcript replay. The caller remains responsible for passing a delta rather than replaying history. Mocks prove argv/input forwarding, not live two-turn continuity.
@@ -28,20 +34,19 @@ A successful run requires exit 0, nonempty assistant text, a session ID and term
 
 | Code | Meaning |
 |---|---|
-| 2 | Argument/input/timeout-setting validation |
+| 2 | Argument/input/config/heartbeat/timeout-setting validation |
 | 65 | Any generic OpenCode error event |
 | 66 | Quota/rate-limit event or stderr diagnostic |
 | 67 | Malformed/empty/truncated/oversized protocol output |
 | 68 | Agent preflight/fallback/identity mismatch |
 | 69 | Child nonzero/signal, even after partial text; original status is in diagnostic |
-| 70 | Owned-tree cleanup could not be proven/completed |
 | 124 | Deadline, including preflight |
 | 127 | Executable spawn failure |
 | 129/130/143 | Delivered SIGHUP/SIGINT/SIGTERM cancellation/disconnected consumer |
 
 No failure emits a successful final message. Partial progress may already have been streamed, and native tools may already have acted; never treat a failed run as completed or automatically retry non-idempotent work.
 
-POSIX creates a private process group and kills that group. Windows uses taskkill /PID <private-cli-pid> /T /F, never /IM or a shared-server PID. Cancellation/timeout await child closure and tree cleanup; taskkill has a three-second cleanup deadline. Cleanup failure reports code 70 and terminates the private root as a last resort, not a claim of descendant cleanup. Windows process.kill(SIGTERM) force-kills a process without delivering JS handlers: external supervisors must kill the wrapper's tree (or own a Job Object). Tests distinguish injected JS signal delivery from real POSIX signals. Windows forced-wrapper termination, detached descendants escaping ownership, a root exiting before taskkill can identify its tree, and shared-server session abort are **not universally guaranteed** here. No shared-server abort is implemented.
+POSIX creates a private process group and kills that group. Windows uses taskkill /PID <private-cli-pid> /T /F, never /IM or a shared-server PID. Cancellation/timeout await child closure and tree cleanup; taskkill has a six-second cleanup deadline. Exit 128/255 is benign only when the owned root has exited; a bounded 250 ms grace handles delayed root-exit delivery without probing or retrying its PID. Cleanup failure is appended to the original diagnostic and preserves its exit code (including timeout/cancellation/protocol errors). A still-owned live root is terminated as a last resort, not a claim of descendant cleanup. Aborted pipes are closed after cleanup so inherited pipes cannot indefinitely hold wrapper EOF. Windows process.kill(SIGTERM) force-kills a process without delivering JS handlers: external supervisors must kill the wrapper's tree (or own a Job Object). Tests distinguish injected JS signal delivery from real POSIX signals. Windows forced-wrapper termination, detached descendants escaping ownership, a root exiting before taskkill can identify its tree, and shared-server session abort are **not universally guaranteed** here. No shared-server abort is implemented.
 
 ## Tools: honest boundary
 
@@ -51,6 +56,6 @@ nativeToolMode=always-on; no toolAvailabilityEnforcement claim. The installed Op
 
 Do not run npm test for offline checks: test-adapter.js calls live inference. Use:
 
-    node --test test/test-cli-wrapper.mjs test/test-cli-backend-offline.mjs
+    node --test test/*.mjs
 
 OPENCODE_BIN points to the shell-free fake-opencode.mjs fixture; .js/.mjs/.cjs overrides execute using the current Node binary. Tests never invoke the real inference CLI. Optional OPENCLAW_JSONL_MODULE and OPENCLAW_PREPARE_MODULE paths enable read-only installed-parser and actual-admission-source-seam tests. Their hashed dist exports are version-specific: re-inspect if names change, do not guess. Assertions prove wrapper/descriptor behavior and a core gate seam, **not picker/main-session/E2E/harness correctness**.

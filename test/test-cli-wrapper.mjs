@@ -16,7 +16,7 @@ let serial = 0;
 function launch(mode = "normal", args = [], input = "question", env = {}, cancel = false) {
   const tracePath = path.join(scratch, String(++serial) + ".jsonl");
   const nodeArgs = cancel ? ["--import", new URL("./fixtures/cancel-bootstrap.mjs", import.meta.url).href, wrapper, ...args] : [wrapper, ...args];
-  const child = spawn(process.execPath, nodeArgs, { cwd: root, env: { ...process.env, OPENCODE_BIN: fixture, OPENCODE_RUN_TIMEOUT_MS: "5000", FIXTURE_MODE: mode, FIXTURE_TRACE: tracePath, ...env }, windowsHide: true, stdio: cancel ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, nodeArgs, { cwd: root, env: { ...process.env, OPENCODE_BIN: fixture, OPENCODE_CONFIG_CONTENT: "{}", OPENCODE_RUN_TIMEOUT_MS: "5000", FIXTURE_MODE: mode, FIXTURE_TRACE: tracePath, ...env }, windowsHide: true, stdio: cancel ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
   child.stdout.on("data", c => stdout += c); child.stderr.on("data", c => stderr += c);
@@ -106,8 +106,11 @@ test("stderr retains bounded diagnostic tail", async () => { const r = await run
 test("timeout kills private tree without killing unrelated sibling", async () => {
   const sibling = spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{ windowsHide:true, stdio:"ignore" });
   try {
-    const work = launch("timeout",[],"question",{OPENCODE_RUN_TIMEOUT_MS:"1000"});
+    const work = launch("silentTree",[],"question",{OPENCODE_RUN_TIMEOUT_MS:"1000",OPENCODE_HEARTBEAT_INTERVAL_MS:"40"});
     const descendant = await waitForDescendant(work.tracePath); const r = await work.result; assertFailure(r,124);
+    assert.match(r.records.at(-1).error, /timed out during inference after 1000ms/);
+    assert.ok(r.records.filter(e=>e.item?.type==="opencode_progress").length > 2);
+    assert.equal(r.records.filter(e=>e.item?.type==="opencode_text_delta").length,0);
     assert.equal(alive(descendant),false,"owned descendant survived timeout"); assert.equal(alive(sibling.pid),true,"unrelated process was killed");
   } finally { sibling.kill(); }
 });
@@ -158,6 +161,69 @@ test("cleanup failure is explicit and does not hang the private root", {skip:pro
   assert.ok(fs.existsSync(work.tracePath),"fixture did not start");
   work.child.send({kind:"breakCleanup",root:path.join(root,"missing-system-root")});
   const r=await work.result;
-  assertFailure(r,70); assert.match(r.stderr,/owned tree cleanup failed/);
+  assertFailure(r,143); assert.match(r.stderr,/cancelled by SIGTERM; owned tree cleanup failed/);
   assert.equal(alive(r.trace.find(row=>row.args?.[0]==="run").pid),false);
+});
+
+
+test("child-only config merge preserves plugins/persona/provider values in preflight and inference", async () => {
+  const config = { snapshot: true, small_model: "opencode/disabled", plugin: ["oh-my-opencode"], agent: { "Sisyphus - ultraworker": { temperature: 0.3 } }, provider: { custom: { options: { apiKey: "synthetic-secret" } } } };
+  const r = await run("normal", [...agent,"--model","opencode/opencode/big-pickle"], "question", { OPENCODE_CONFIG_CONTENT: JSON.stringify(config), OPENCODE_DISABLE_AUTOUPDATE: "false" });
+  assert.equal(r.code,0,r.stderr);
+  for (const row of r.trace.filter(e=>e.args)) {
+    assert.deepEqual(row.config, { ...config, snapshot:false, small_model:"opencode/big-pickle" });
+    assert.equal(row.autoUpdateDisabled,"true");
+  }
+  assert.deepEqual(r.trace.filter(e=>e.args).map(e=>e.args[0]),["agent","run"]);
+  assert.ok(!r.stdout.includes("synthetic-secret")); assert.ok(!r.stderr.includes("synthetic-secret"));
+});
+test("no --model retains supplied small_model; absent config creates snapshot override only", async () => {
+  const r=await run("normal",[],"question",{OPENCODE_CONFIG_CONTENT:JSON.stringify({small_model:"custom/model",plugin:["omo"]})});
+  assert.equal(r.code,0,r.stderr); assert.deepEqual(r.trace[0].config,{small_model:"custom/model",plugin:["omo"],snapshot:false});
+  const absent=await run("normal",[],"question",{OPENCODE_CONFIG_CONTENT:undefined});
+  assert.equal(absent.code,0,absent.stderr); assert.deepEqual(absent.trace[0].config,{snapshot:false});
+});
+for (const content of ["", "{synthetic-secret-invalid", "null", "[]", "1", "true", JSON.stringify("synthetic-secret")]) {
+  test("invalid config fails explicitly before any spawn: " + content, async () => {
+    const r=await run("normal",agent,"question",{OPENCODE_CONFIG_CONTENT:content});
+    assertFailure(r,2); assert.equal(r.trace.length,0);
+    assert.match(r.records.at(-1).error,/OPENCODE_CONFIG_CONTENT must be a valid JSON object/);
+    assert.ok(!r.stdout.includes("synthetic-secret")); assert.ok(!r.stderr.includes("synthetic-secret"));
+  });
+}
+for (const value of ["0","-1","60001","NaN","1.5"]) test("invalid heartbeat interval fails pre-spawn: "+value,async()=>{
+  const r=await run("normal",[],"question",{OPENCODE_HEARTBEAT_INTERVAL_MS:value}); assertFailure(r,2); assert.equal(r.trace.length,0);
+});
+test("silent startup/inference emit repeated JSONL heartbeat with no projected text and no timer leak",async()=>{
+  const r=await run("silent",agent,"question",{OPENCODE_HEARTBEAT_INTERVAL_MS:"30"});
+  assert.equal(r.code,0,r.stderr);
+  const beats=r.records.filter(e=>e.item?.type==="opencode_progress");
+  const backend=buildOpenCodeCliBackend();
+  for (const phase of ["preflight","inference"]) assert.ok(beats.filter(e=>e.item.phase===phase).length>=3);
+  for (const beat of beats) {
+    assert.deepEqual(Object.keys(beat),["item"]);
+    assert.deepEqual(Object.keys(beat.item),["type","phase"]);
+    assert.equal(backend.parseJsonlEvent(JSON.stringify(beat)),null);
+  }
+  assert.equal(r.records.at(-1).item.type,"message","heartbeat leaked after final result");
+});
+test("silent preflight timeout emits heartbeat, explicit primary error and cleans timers",async()=>{
+  const r=await run("agentHang",agent,"question",{OPENCODE_RUN_TIMEOUT_MS:"400",OPENCODE_HEARTBEAT_INTERVAL_MS:"30"});
+  assertFailure(r,124); assert.match(r.records.at(-1).error,/timed out during preflight/);
+  assert.ok(r.records.filter(e=>e.item?.type==="opencode_progress").length>=3);
+  assert.ok(!r.trace.some(e=>e.args?.[0]==="run"));
+  assert.equal(alive(r.trace[0].pid),false);
+});
+
+test("installed generic/custom JSONL parser ignores heartbeat-only output without terminal success",{skip:!process.env.OPENCLAW_JSONL_MODULE},async()=>{
+  const {m:createParser}=await import(pathToFileURL(process.env.OPENCLAW_JSONL_MODULE).href);
+  const descriptor=buildOpenCodeCliBackend();
+  for(const custom of [false,true]) {
+    const deltas=[],sessions=[];
+    const parser=createParser({backend:descriptor.config,providerId:descriptor.id,...(custom?{parseJsonlEvent:descriptor.parseJsonlEvent}:{}),onAssistantDelta:d=>deltas.push(d),onSessionId:id=>sessions.push(id)});
+    for(const phase of ["preflight","inference"]) parser.push(JSON.stringify({item:{type:"opencode_progress",phase}})+"\n");
+    // The installed parser represents wholly ignored output as null, not an empty result.
+    parser.finish();assert.equal(parser.getOutput(),null);
+    assert.deepEqual(deltas,[]);assert.deepEqual(sessions,[]);assert.equal(parser.hasTerminalResult(),false);
+  }
 });

@@ -49,6 +49,8 @@ export function buildOpenCodeCliBackend() {
     // Public OpenClaw custom JSONL seam; does not project native tools into OpenClaw.
     parseJsonlEvent(line) {
       const record = JSON.parse(line);
+      // Wrapper liveness bytes reset the watchdog, never assistant text/session state.
+      if (record.item?.type === "opencode_progress") return null;
       const session = typeof record.sessionID === "string" ? [{ kind: "sessionId", sessionId: record.sessionID }] : [];
       if (record.item?.type === "opencode_text_delta" && typeof record.item.text === "string") {
         return [...session, { kind: "text", text: record.item.text }];
