@@ -11,7 +11,7 @@ export function buildOpenCodeCliBackend() {
     id: "opencode-cli",
     modelProvider: "opencode",
     liveTest: {
-      defaultModelRef: "opencode/mimo-v2.6-flash-free",
+      defaultModelRef: "opencode/step-5-preview-free",
       defaultImageProbe: false,
       defaultMcpProbe: false,
       docker: {

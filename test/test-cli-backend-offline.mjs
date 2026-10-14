@@ -4,6 +4,9 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { buildOpenCodeCliBackend } from "../src/cli-backend.js";
 const backend = buildOpenCodeCliBackend();
+test("live-test default targets the Hermes-proven step-5 route", () => {
+  assert.equal(backend.liveTest.defaultModelRef,"opencode/step-5-preview-free");
+});
 test("descriptor is honest always-on and has no exact-cap enforcement declaration", () => {
   assert.equal(backend.nativeToolMode,"always-on");
   assert.equal(Object.hasOwn(backend,"toolAvailabilityEnforcement"),false);
