@@ -6,6 +6,8 @@
   "cliBackends": [
     "opencode-cli"
   ],
+  "syntheticAuthRefs": ["opencode-cli"],
+  "providerCatalogEntry": "./src/provider-discovery.js",
   "setup": {
     "cliBackends": [
       "opencode-cli"

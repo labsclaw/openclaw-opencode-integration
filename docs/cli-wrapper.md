@@ -1,5 +1,16 @@
 # OpenCode CLI wrapper contract
 
+## Native login availability (2026-10-24)
+
+The manifest advertises `syntheticAuthRefs: ["opencode-cli"]`. Its lightweight
+`providerCatalogEntry` checks the existing CLI auth store for API/OAuth login
+presence and publishes a native-runtime-only marker, never a real credential.
+This is required by current OpenClaw admission: an executable responding directly
+does not itself populate prepared runtime auth modes. The `opencode/*` namespace,
+existing CLI-owned login, and hosted-inference guard are unchanged. Presence is
+not proof of account eligibility or successful inference. A fresh Gateway canary
+after plugin reload is still required. No new model provider config is created.
+
 ## Invocation and authority
 
 The descriptor pins Sisyphus - ultraworker in cold and resume argv. An explicit agent must appear exactly as a primary (or all-mode) agent in a bounded opencode agent list preflight using the same executable, cwd and environment. A missing agent, subagent-only entry, failed list, fallback diagnostic or contradictory reported agent fails closed. No implicit build retry.

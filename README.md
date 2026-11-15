@@ -10,7 +10,7 @@ O endpoint oficial Zen (`https://opencode.ai/zen/v1`) valida contextualmente as 
 HTTP 403: OpenCode's free tier can only be used from within OpenCode
 ```
 
-Esta integração resolve o problema na raiz: em vez de tentar emular headers estáticos sujeitos a bloqueios contínuos, **redireciona a inferência para o executável nativo do OpenCode CLI local**, executando a persona oficial **`Sisyphus - ultraworker`** e interceptando o tráfego com garantias fail-closed.
+Esta integração **encaminha a inferência para o executável nativo do OpenCode CLI local**, com preflight da persona **`Sisyphus - ultraworker`**. O guard recusa a rota hosted nos hooks de inferência registrados, mas não garante elegibilidade gratuita: o próprio CLI também pode receber `FreeTierError`. Catálogo e presença de login não comprovam inferência saudável.
 
 ---
 
@@ -33,6 +33,8 @@ O guia completo com todos os detalhes de configuração do `openclaw.json`, trat
 
 👉 **[REPLICATION_GUIDE.md](./REPLICATION_GUIDE.md)**
 
+Instalação local vinculada (`openclaw plugins install --link`): manter uma única árvore registrada. Neste host, a fonte canônica é `workspace/openclaw-opencode-integration`; `plugins/opencode-cli` é apenas uma junction de compatibilidade. O guia registra backups, limites e critérios de aceitação.
+
 ---
 
 ## 🧪 Testes e Validação Offline
@@ -43,9 +45,11 @@ Para rodar a suíte de validação automatizada (100% offline, sem gastar tokens
 # Validação de sintaxe e exports
 node scripts/verify-plugin.mjs
 
-# Bateria de testes automatizados (83 testes)
-node --test test/test-zen-inference-guard.mjs test/test-telegram-picker-seam.mjs test/test-cli-backend-offline.mjs test/test-zen-fallback-scope.mjs test/test-cli-wrapper.mjs
+# Suíte offline: registrar pass/fail/skip da versão atual
+node --test test/test-zen-inference-guard.mjs test/test-telegram-picker-seam.mjs test/test-cli-backend-offline.mjs test/test-zen-fallback-scope.mjs test/test-cli-wrapper.mjs test/test-cli-process.mjs test/test-native-auth.mjs
 ```
+
+Seams dependentes de hashes antigos do core podem ser ignorados e não comprovam Telegram E2E. `npm test` faz inferência real pelo adaptador; não o tratar como teste offline.
 
 ---
 
