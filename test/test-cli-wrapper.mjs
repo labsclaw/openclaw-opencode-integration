@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const wrapper = path.join(root, "src/opencode-cli-wrapper.js");
 const fixture = fileURLToPath(new URL("./fixtures/fake-opencode.mjs", import.meta.url));
-const agent = ["--agent", "Sisyphus - ultraworker"];
+const agent = ["--agent", "sisyphus"];
 const scratch = fs.mkdtempSync(path.join(root, ".wrapper-test-"));
 test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 let serial = 0;
@@ -54,7 +54,7 @@ test("normal: snapshot dedup, no reasoning, aggregate usage and one final messag
   assert.equal(messages(r)[0].cost, 0.003);
   assert.equal(r.records.filter(e => e.item?.type === "opencode_text_delta").map(e => e.item.text).join(""), "Olá 🧪");
   assert.ok(!r.stdout.includes("never expose reasoning"));
-  assert.deepEqual(r.trace.filter(e => e.args).map(e => e.args[0]), ["agent", "run"]);
+  assert.deepEqual(r.trace.filter(e => e.args).map(e => e.args[0]), ["debug", "run"]);
 });
 for (const [mode, code] of [["quotaLargeChunk",66],["truncated",67],["toolFinish",67],["missingSession",67],["error",65],["emptyError",65],["partialError",65],["quota",66],["splitQuota",66],["partialExit",69],["emptyExit",69],["empty",67],["malformed",67],["invalidUtf8",67],["sdk",67],["largeLine",67],["largeStderr",67],["largeStdout",67],["largeText",67],["nonmonotonic",67],["badUsage",67]]) {
   test("fail closed: " + mode, async () => assertFailure(await run(mode), code));
@@ -174,7 +174,7 @@ test("child-only config merge preserves plugins/persona/provider values in prefl
     assert.deepEqual(row.config, { ...config, snapshot:false, small_model:"opencode/big-pickle" });
     assert.equal(row.autoUpdateDisabled,"true");
   }
-  assert.deepEqual(r.trace.filter(e=>e.args).map(e=>e.args[0]),["agent","run"]);
+  assert.deepEqual(r.trace.filter(e=>e.args).map(e=>e.args[0]),["debug","run"]);
   assert.ok(!r.stdout.includes("synthetic-secret")); assert.ok(!r.stderr.includes("synthetic-secret"));
 });
 test("no --model retains supplied small_model; absent config creates snapshot override only", async () => {

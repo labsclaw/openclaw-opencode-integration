@@ -47,8 +47,12 @@ function parseArgs(raw) {
   return { ...options, prompt };
 }
 const npmRoot = process.env.APPDATA ? path.join(process.env.APPDATA, "npm") : path.join(process.env.USERPROFILE || "", "AppData", "Roaming", "npm");
-const nativeBinary = path.join(npmRoot, "node_modules", "opencode-ai", "bin", "opencode.exe");
-const binary = process.env.OPENCODE_BIN || (process.platform === "win32" && fs.existsSync(nativeBinary) ? nativeBinary : "opencode");
+// OpenCode ships as @opencode/cli on current npm installs; opencode-ai is the legacy name.
+const nativeBinary = [
+  path.join(npmRoot, "node_modules", "@opencode", "cli", "bin", "opencode.exe"),
+  path.join(npmRoot, "node_modules", "opencode-ai", "bin", "opencode.exe"),
+].find((candidate) => fs.existsSync(candidate));
+const binary = process.env.OPENCODE_BIN || (process.platform === "win32" && nativeBinary ? nativeBinary : "opencode");
 // .js/.mjs/.cjs is an explicit shell-free executable seam for offline Node fixtures.
 const script = /\.(?:mjs|cjs|js)$/i.test(binary);
 const env = { ...process.env, ...(process.platform === "win32" && process.env.USERPROFILE ? { HOME: process.env.USERPROFILE } : {}), OPENCODE_DISABLE_PROJECT_CONFIG: "true", OPENCODE_DISABLE_AUTOUPDATE: "true" };
@@ -180,8 +184,41 @@ async function main() {
 
   timer = setTimeout(() => abort(fail(EXIT.timeout, "timed out during " + phase + " after " + timeoutMs + "ms")), timeoutMs);
   if (options.agent) {
+    // OpenCode v2 replaced `agent list` with `debug agents` (JSON). Support both so the
+    // preflight stays a fail-closed check instead of a silent fallback to `build`.
+    // Match by `id` only: `run --agent` requires the id (`--agent Build` -> exit 1
+    // "Agent not found", while the display name would wrongly pass here).
     let found = false;
-    await execute(["agent", "list"], (line) => { if (line === options.agent + " (primary)" || line === options.agent + " (all)") found = true; }, { preflight: true });
+    const agentListLine = (line) => {
+      const name = line.trim().replace(/^\s*[-*]\s*/, "");
+      if (name === options.agent || name === options.agent + " (primary)" || name === options.agent + " (all)") found = true;
+    };
+    let sawDebugAgents = false, sawAgentList = false;
+    try {
+      let debugOut = "";
+      await execute(["debug", "agents"], (line) => { debugOut += line + "\n"; }, { preflight: true });
+      sawDebugAgents = true;
+      // `debug agents` prints a multi-line JSON array; parse the accumulated stdout.
+      const parsed = JSON.parse(debugOut.trim());
+      for (const a of (Array.isArray(parsed) ? parsed : [])) {
+        if (a && a.id === options.agent) found = true;
+      }
+    } catch {
+      // fall through to the legacy surface below
+    }
+    if (!found) {
+      try {
+        await execute(["agent", "list"], agentListLine, { preflight: true });
+        sawAgentList = true;
+      } catch (error) {
+        // Preserve the primary failure identity (timeout/quota/spawn). Only a genuine
+        // "both listing surfaces missing" becomes EXIT.agent; swallowing a timeout here
+        // would relabel exit 124 as 68 and hide the /timed out during preflight/ text.
+        if (error && error.exitCode) throw error;
+        if (!sawDebugAgents) throw fail(EXIT.agent, "cannot list OpenCode agents (debug agents and agent list failed)");
+        throw fail(EXIT.agent, "cannot list OpenCode agents (agent list failed)");
+      }
+    }
     if (!found) throw fail(EXIT.agent, "requested primary agent is not listed: " + options.agent);
   }
   const cliArgs = ["run", "--format", "json"];

@@ -11,7 +11,7 @@ export function buildOpenCodeCliBackend() {
     id: "opencode-cli",
     modelProvider: "opencode",
     liveTest: {
-      defaultModelRef: "opencode/step-5-preview-free",
+      defaultModelRef: "opencode/big-pickle",
       defaultImageProbe: false,
       defaultMcpProbe: false,
       docker: {
@@ -26,13 +26,13 @@ export function buildOpenCodeCliBackend() {
       args: [
         wrapperPath,
         "--agent",
-        "Sisyphus - ultraworker",
+        "build",
         "--thinking",
       ],
       resumeArgs: [
         wrapperPath,
         "--agent",
-        "Sisyphus - ultraworker",
+        "build",
         "--thinking",
         "--session",
         "{sessionId}",
