@@ -48,3 +48,13 @@ test("entrypoint retains CLI registration and adds only canonical guard", () => 
   assert.deepEqual(manifest.providers,["opencode"]);
   assert.deepEqual(manifest.cliBackends,["opencode-cli"]);
 });
+test("normal plugin registration forwards selected mode to the backend", () => {
+  const src=fs.readFileSync(new URL("../index.js",import.meta.url),"utf8");
+  const runnable=src.split("\n").filter(l=>!l.startsWith("import ")).join("\n").replace("export default definePluginEntry(","globalThis.entry=definePluginEntry(");
+  let received;
+  const ctx={definePluginEntry:x=>x,buildOpenCodeCliBackend:config=>{received=config;return {id:"opencode-cli"};},buildOpenCodeZenInferenceGuard};
+  vm.createContext(ctx);vm.runInContext(runnable,ctx);
+  const selected={mode:"omo",agent:"sisyphus"};
+  ctx.entry.register({pluginConfig:selected,registerCliBackend:()=>{},registerProvider:()=>{}});
+  assert.equal(received,selected);
+});

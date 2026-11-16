@@ -9,11 +9,31 @@ trace({ args, pid: process.pid, config: JSON.parse(process.env.OPENCODE_CONFIG_C
 if (mode === "silent") await new Promise(resolve => setTimeout(resolve, 180));
 const emit = (e, newline = true) => process.stdout.write(JSON.stringify(e) + (newline ? "\n" : ""));
 const text = (value, extra = {}) => emit({ type: "text", sessionID: "ses_main", part: { text: value }, ...extra });
-if (args[0] === "loop") { setInterval(() => {}, 1000); }
-else if (args[0] === "agent") {
+if (args[0] === "--version") process.stdout.write(process.env.FIXTURE_VERSION || "1.19.4");
+else if (args[0] === "loop") { setInterval(() => {}, 1000); }
+else if (args[0] === "debug" && args[1] === "agents") {
+  // OpenCode v2 replaced `agent list` with `debug agents` (JSON array of {id,name,mode}).
+  // The wrapper matches by `id` only, because `run --agent` accepts ids (`Build` -> exit 1).
   if (mode === "agentHang") setInterval(() => {}, 1000);
   else if (mode === "agentListFail") process.exitCode = 9;
-  else process.stdout.write(mode === "unknownAgent" ? "build (primary)\n" : mode === "subagent" ? "Sisyphus - ultraworker (subagent)\n" : 'Sisyphus - ultraworker (primary)\n  [{"permission":"*"}]\n');
+  else {
+    // `unknownAgent` hides the requested agent from BOTH listing surfaces so the
+    // preflight fails closed (exit 68) instead of silently running `build`.
+    const agents = [
+      { id: "build", name: "Build", mode: "primary" },
+      { id: "plan", name: "Plan", mode: "primary" }
+    ];
+    agents.push({ id: "general", name: "General", mode: "subagent" });
+    if (mode !== "unknownAgent") agents.push({ id: "sisyphus", name: "Sisyphus - ultraworker", mode: mode === "subagent" ? "subagent" : mode === "agentAll" ? "all" : "primary" });
+    if (mode === "ambiguousAgents") agents.push({ id: "other", name: "Sisyphus - ultraworker", mode: "primary" });
+    process.stdout.write(mode === "malformedAgents" ? "invalid-json\n" : JSON.stringify(agents) + "\n");
+  }
+}
+else if (args[0] === "agent") {
+  // Legacy surface (OpenCode v1). Kept so the wrapper's fallback path stays covered.
+  if (mode === "agentHang") setInterval(() => {}, 1000);
+  else if (mode === "agentListFail") process.exitCode = 9;
+  else process.stdout.write(mode === "unknownAgent" || args.includes("--pure") ? "build (primary)\n" : mode === "subagent" ? "Sisyphus - ultraworker (subagent)\n" : 'Sisyphus - ultraworker (primary)\n  [{"permission":"*"}]\n');
 } else {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);

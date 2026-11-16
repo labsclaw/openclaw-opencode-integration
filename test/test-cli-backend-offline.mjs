@@ -4,13 +4,25 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { buildOpenCodeCliBackend } from "../src/cli-backend.js";
 const backend = buildOpenCodeCliBackend();
-test("live-test default targets the Hermes-proven step-5 route", () => {
-  assert.equal(backend.liveTest.defaultModelRef,"opencode/step-5-preview-free");
+test("live-test default targets a model that exists in the catalog", () => {
+  assert.equal(backend.liveTest.defaultModelRef, "opencode/big-pickle");
 });
 test("descriptor is honest always-on and has no exact-cap enforcement declaration", () => {
-  assert.equal(backend.nativeToolMode,"always-on");
-  assert.equal(Object.hasOwn(backend,"toolAvailabilityEnforcement"),false);
-  for (const args of [backend.config.args,backend.config.resumeArgs]) assert.equal(args[args.indexOf("--agent")+1],"Sisyphus - ultraworker");
+  assert.equal(backend.nativeToolMode, "always-on");
+  assert.equal(Object.hasOwn(backend, "toolAvailabilityEnforcement"), false);
+  // `build` is an OpenCode v2 built-in agent id (debug agents lists ids build/plan/...).
+  // The previous 'Sisyphus - ultraworker' is an OMO display name that this CLI rejects.
+  for (const args of [backend.config.args, backend.config.resumeArgs]) assert.equal(args[args.indexOf("--agent") + 1], "build");
+});
+test("native default, explicit OMO and custom agent reach both cold and resume", () => {
+  for (const [config, mode, agent] of [[{}, "native", "build"], [{mode:"omo"}, "omo", "Sisyphus - ultraworker"], [{mode:"omo",agent:"sisyphus"},"omo","sisyphus"]]) {
+    const b = buildOpenCodeCliBackend(config);
+    for (const argv of [b.config.args,b.config.resumeArgs]) {
+      assert.equal(argv[argv.indexOf("--mode")+1],mode);
+      assert.equal(argv[argv.indexOf("--agent")+1],agent);
+    }
+  }
+  for (const config of [{mode:"unknown"},{agent:""},{agent:" build"},{agent:"bad\nagent"}]) assert.throws(()=>buildOpenCodeCliBackend(config));
 });
 for (const baseArgs of [backend.config.args,backend.config.resumeArgs]) {
   test("cold/resume: explicit empty or restricted tools throw before execution", () => {

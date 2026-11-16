@@ -31,6 +31,48 @@ function launch(mode = "normal", args = [], input = "question", env = {}, cancel
 const run = (...args) => launch(...args).result;
 const messages = r => r.records.filter(e => e.item?.type === "message");
 function assertFailure(r, code) { assert.equal(r.code, code, r.stderr); assert.equal(messages(r).length, 0); assert.equal(r.records.at(-1).type, "error"); }
+test("native v1 disables plugins on agent listing and run; OMO remains opt-in", async () => {
+  const r=await run("normal",["--mode","native"]);
+  assert.equal(r.code,0,r.stderr);
+  const calls=r.trace.filter(e=>e.args);
+  assert.deepEqual(calls.map(e=>e.args[0]),["--version","agent","run"]);
+  for(const row of calls.slice(1)) assert.ok(row.args.includes("--pure"));
+  assert.equal(calls.at(-1).args[calls.at(-1).args.indexOf("--agent")+1],"build");
+  const omo=await run("normal",["--mode","omo"]);
+  assert.equal(omo.code,0,omo.stderr);
+  assert.ok(omo.trace.filter(e=>e.args).every(e=>!e.args.includes("--pure")));
+});
+test("v2 resolves a display name to id and refuses subagent-only, missing, ambiguous and invalid JSON",async()=>{
+  for(const mode of ["normal","agentAll"]) {
+    const r=await run(mode,["--mode","omo"],"question",{FIXTURE_VERSION:"opencode v2.2.5"});
+    assert.equal(r.code,0,r.stderr);
+    const argv=r.trace.find(e=>e.args?.[0]==="run").args;
+    assert.equal(argv[argv.indexOf("--agent")+1],"sisyphus");
+    assert.ok(argv.includes("--standalone"));
+  }
+  for(const mode of ["subagent","unknownAgent","ambiguousAgents","malformedAgents"]){
+    const r=await run(mode,["--mode","omo"],"question",{FIXTURE_VERSION:"2.2.5"});
+    assertFailure(r,68);assert.ok(!r.trace.some(e=>e.args?.[0]==="run"));
+  }
+  const forbidden=await run("normal",["--agent","general"],"question",{FIXTURE_VERSION:"2.2.5"});
+  assertFailure(forbidden,68); assert.ok(!forbidden.trace.some(e=>e.args?.[0]==="run"));
+});
+test("native v2 requests plugin denial only in child config, preserves other policies and resumes privately",async()=>{
+  const config={plugins:["existing-plugin"],policies:[{action:"tool.use",resource:"shell:*",effect:"deny"}],other:"keep",small_model:"paid/model",agents:{title:{model:"paid/model",disabled:false},review:{model:"unchanged/model"}}};
+  const r=await run("normal",["--mode","native","--session","ses_main","--model","opencode/big-pickle"],"delta",{FIXTURE_VERSION:"2.2.5",OPENCODE_CONFIG_CONTENT:JSON.stringify(config)});
+  assert.equal(r.code,0,r.stderr);
+  const rows=r.trace.filter(e=>e.args&&e.args[0]!=="--version");
+  for(const row of rows){assert.ok(row.args.includes("--standalone"));assert.deepEqual(row.config.plugins,[]);assert.deepEqual(row.config.policies,[...config.policies,{action:"plugin.use",resource:"*",effect:"deny"}]);assert.equal(row.config.other,"keep");assert.equal(row.config.small_model,"opencode/big-pickle");assert.equal(row.config.agents.title.model,"opencode/big-pickle");assert.equal(row.config.agents.title.disabled,false);assert.deepEqual(row.config.agents.review,config.agents.review);}
+  const argv=rows.at(-1).args;
+  assert.ok(argv.includes("--standalone")); assert.ok(!argv.includes("--pure"));
+  assert.equal(argv[argv.indexOf("--session")+1],"ses_main");
+});
+test("unsupported version and malformed mode fail before inference; v2 timeout retains identity",async()=>{
+  for(const version of ["3.0.0","not-a-version"]){const r=await run("normal",agent,"question",{FIXTURE_VERSION:version});assertFailure(r,68);assert.ok(!r.trace.some(e=>e.args?.[0]==="run"));}
+  assertFailure(await run("normal",["--mode","invalid"]),2);
+  const r=await run("agentHang",["--mode","native"],"question",{FIXTURE_VERSION:"2.2.5",OPENCODE_RUN_TIMEOUT_MS:"400"});
+  assertFailure(r,124);assert.match(r.records.at(-1).error,/preflight/);assert.ok(!r.trace.some(e=>e.args?.[0]==="run"));
+});
 function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 async function waitForDescendant(tracePath) {
   const end = Date.now() + 4000;
@@ -54,7 +96,7 @@ test("normal: snapshot dedup, no reasoning, aggregate usage and one final messag
   assert.equal(messages(r)[0].cost, 0.003);
   assert.equal(r.records.filter(e => e.item?.type === "opencode_text_delta").map(e => e.item.text).join(""), "Olá 🧪");
   assert.ok(!r.stdout.includes("never expose reasoning"));
-  assert.deepEqual(r.trace.filter(e => e.args).map(e => e.args[0]), ["agent", "run"]);
+  assert.deepEqual(r.trace.filter(e => e.args).map(e => e.args[0]), ["--version", "agent", "run"]);
 });
 for (const [mode, code] of [["quotaLargeChunk",66],["truncated",67],["toolFinish",67],["missingSession",67],["error",65],["emptyError",65],["partialError",65],["quota",66],["splitQuota",66],["partialExit",69],["emptyExit",69],["empty",67],["malformed",67],["invalidUtf8",67],["sdk",67],["largeLine",67],["largeStderr",67],["largeStdout",67],["largeText",67],["nonmonotonic",67],["badUsage",67]]) {
   test("fail closed: " + mode, async () => assertFailure(await run(mode), code));
@@ -174,7 +216,7 @@ test("child-only config merge preserves plugins/persona/provider values in prefl
     assert.deepEqual(row.config, { ...config, snapshot:false, small_model:"opencode/big-pickle" });
     assert.equal(row.autoUpdateDisabled,"true");
   }
-  assert.deepEqual(r.trace.filter(e=>e.args).map(e=>e.args[0]),["agent","run"]);
+  assert.deepEqual(r.trace.filter(e=>e.args).map(e=>e.args[0]),["--version","agent","run"]);
   assert.ok(!r.stdout.includes("synthetic-secret")); assert.ok(!r.stderr.includes("synthetic-secret"));
 });
 test("no --model retains supplied small_model; absent config creates snapshot override only", async () => {

@@ -1,18 +1,31 @@
 # OpenCode CLI wrapper contract
 
+## Native login availability (2026-10-24)
+
+The manifest advertises `syntheticAuthRefs: ["opencode-cli"]`. Its lightweight
+`providerCatalogEntry` checks the existing CLI auth store for API/OAuth login
+presence and publishes a native-runtime-only marker, never a real credential.
+This is required by current OpenClaw admission: an executable responding directly
+does not itself populate prepared runtime auth modes. The `opencode/*` namespace,
+existing CLI-owned login, and hosted-inference guard are unchanged. Presence is
+not proof of account eligibility or successful inference. A fresh Gateway canary
+after plugin reload is still required. No new model provider config is created.
+
 ## Invocation and authority
 
-The descriptor pins Sisyphus - ultraworker in cold and resume argv. An explicit agent must appear exactly as a primary (or all-mode) agent in a bounded opencode agent list preflight using the same executable, cwd and environment. A missing agent, subagent-only entry, failed list, fallback diagnostic or contradictory reported agent fails closed. No implicit build retry.
+The descriptor defaults to mode=native, agent=build in cold and resume argv. mode=omo explicitly requests Sisyphus - ultraworker; an optional agent config overrides the requested id/name. V1 uses `agent list` and requires the exact primary/all name. V2 uses `debug agents` JSON, resolves a unique id or exact display name to its id, and requires mode primary/all. Missing, subagent-only, ambiguous or malformed listings fail before inference. Version, timeout and quota failures are never swallowed as reasons to switch persona.
+
+Native V1 passes `--pure` to listing and run so global OMO hooks are not loaded. Native V2 requests plugins=[] plus a final plugin.use deny policy in the child-only CLI config overlay; run uses `--standalone` so a shared service cannot ignore the overlay. This is a plugin request, not a tool sandbox or an override of higher-priority managed policy. Other policies/config remain. OMO leaves plugins enabled and fails if the requested agent is absent. Change profile only with a new session; do not reuse an OMO session as if it were a fresh native session.
 
 Preflight is **availability evidence**, not effective-persona evidence: flat run events need not report agent/model identity. A configuration change between preflight and run remains a TOCTOU boundary. Real Sisyphus behavior/tools/hooks require a separate controlled CLI execution, not these fixtures.
 
-Supported wrapper flags: --thinking, --model, --agent, --session, --variant, and one positional prompt (or stdin). Unknown/duplicate flags, missing values, invalid/control-character values, --attach, --continue, --auto and shell shims are rejected. This adapter never attaches to a shared server. Omitted model/agent retains the CLI default for direct wrapper callers; the descriptor always supplies Sisyphus.
+Supported wrapper flags: --mode native|omo, --thinking, --model, --agent, --session, --variant, and one positional prompt (or stdin). Unknown/duplicate flags, missing values, invalid/control-character values, --attach, --continue, --auto and shell shims are rejected. This adapter never attaches to a shared server. Omitting both mode and agent retains legacy CLI defaults for direct wrapper callers (not the supported configured backend path); the OpenClaw descriptor always supplies a mode and agent. Version detection accepts v1/v2 and fails closed for other/unknown majors. V1 and V2 use different configuration keys; fixture success is not proof of all releases or plugin-policy enforcement.
 
 Bare model names receive opencode/; the known doubled opencode/opencode/ prefix is collapsed once. Other qualified providers, including nested model IDs such as openrouter/anthropic/model, remain unchanged. Syntax validation does not promise catalog availability or authentication. CLI errors remain terminal. Variants are provider-specific: explicit variants are preserved, never clamped from max/minimal to high. No variant is guessed from OpenClaw thinking levels. Off removes --thinking display and --variant, but cannot promise the provider internally stops reasoning; --thinking means display blocks. Always-on thinking mode drops an explicit variant.
 
 ## Per-child configuration and liveness
 
-The wrapper parses `OPENCODE_CONFIG_CONTENT` as a JSON object before any spawn. Invalid JSON, null, arrays and scalars fail with code 2 without logging the supplied content. Existing keys (including plugins, agent/persona and provider settings) are retained. Only `snapshot:false` is forced, and an explicit normalized `--model` also sets `small_model` to the same model to avoid an inaccessible automatic title model. Without `--model`, an existing small_model is retained. Overrides affect only subprocess environment, never global config files. `OPENCODE_DISABLE_AUTOUPDATE=true` prevents startup updates; plugins including Sisyphus remain enabled.
+The wrapper parses `OPENCODE_CONFIG_CONTENT` as a JSON object before any spawn. Invalid JSON, null, arrays and scalars fail with code 2 without logging content. V1 forces snapshot:false and an explicit --model pins small_model to the same model. After version detection V2 merges OPENCODE_CLI_CONFIG_CONTENT, forces snapshots:false and pins both small_model and agents.title.model to the requested model, preserving other title fields/agents. This prevents title generation from silently selecting a separate paid helper. Existing small-model settings remain when --model is omitted. Native mode additionally bypasses plugins as described above; OMO preserves plugin configuration. Other settings remain; overrides affect only subprocess environment, never global files. OPENCODE_DISABLE_AUTOUPDATE=true prevents startup updates.
 
 Every preflight/inference spawn emits `item.type=opencode_progress` with only its phase, immediately and every 15 seconds. `OPENCODE_HEARTBEAT_INTERVAL_MS` may set a validated 1..60000 ms interval. These JSONL bytes keep the no-output watchdog alive; the descriptor and generic JSONL parser ignore them (no assistant text, usage or session binding). Heartbeats are liveness, not evidence of model progress. Timers stop on child close, abort and wrapper completion. The independent `OPENCODE_RUN_TIMEOUT_MS` deadline (default 240000 ms, including preflight) still terminates genuinely stuck calls with code 124 and a phase-specific error.
 
@@ -54,7 +67,7 @@ nativeToolMode=always-on; no toolAvailabilityEnforcement claim. The installed Op
 
 ## Offline verification
 
-Do not run npm test for offline checks: test-adapter.js calls live inference. Use:
+`npm test` runs structural validation followed by the offline suite. Live inference is separate: `npm run test:live` requires an explicitly authorized `OPENCODE_TEST_MODEL`. For the offline suite alone, use:
 
     node --test test/*.mjs
 

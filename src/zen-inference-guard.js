@@ -3,7 +3,7 @@ export const OPENCODE_CLI_ROUTE_REQUIRED = "OPENCODE_CLI_ROUTE_REQUIRED";
 
 export class OpenCodeInferenceRouteError extends Error {
   constructor() {
-    super("OpenCode inference requires the local opencode-cli runtime. Select /model opencode/<model> --runtime opencode-cli -s. No hosted request was sent.");
+    super("OpenCode inference requires the local opencode-cli runtime. Select /model opencode/<model> --runtime default -s to use the configured CLI policy. No hosted request was sent.");
     this.name = "OpenCodeInferenceRouteError";
     this.code = OPENCODE_CLI_ROUTE_REQUIRED;
     // This closes only the hosted OpenCode stream seam. OpenClaw may still

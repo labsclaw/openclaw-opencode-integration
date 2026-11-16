@@ -6,6 +6,8 @@
   "cliBackends": [
     "opencode-cli"
   ],
+  "syntheticAuthRefs": ["opencode-cli"],
+  "providerCatalogEntry": "./src/provider-discovery.js",
   "setup": {
     "cliBackends": [
       "opencode-cli"
@@ -17,6 +19,10 @@
   },
   "configSchema": {
     "type": "object",
-    "additionalProperties": false
+    "additionalProperties": false,
+    "properties": {
+      "mode": { "type": "string", "enum": ["native", "omo"], "default": "native", "description": "native selects build and bypasses external plugins; omo explicitly enables the configured OMO agent." },
+      "agent": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Explicit primary/all agent id or exact display name. Defaults to build (native) or Sisyphus - ultraworker (omo)." }
+    }
   }
 }
