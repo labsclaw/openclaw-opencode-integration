@@ -6,7 +6,11 @@ const wrapperPath = fileURLToPath(new URL("./opencode-cli-wrapper.js", import.me
  * OpenClaw CLI Backend descriptor for OpenCode CLI.
  * Maps opencode run commands, arguments, and session reuse into OpenClaw's text inference runner.
  */
-export function buildOpenCodeCliBackend() {
+export function buildOpenCodeCliBackend(options = {}) {
+  const mode = options.mode ?? "native";
+  if (!["native", "omo"].includes(mode)) throw new Error("OpenCode mode must be native or omo");
+  const agent = options.agent ?? (mode === "native" ? "build" : "Sisyphus - ultraworker");
+  if (typeof agent !== "string" || !agent.trim() || agent !== agent.trim() || agent.length > 256 || /[\x00-\x1f\x7f]/.test(agent)) throw new Error("Invalid OpenCode agent");
   return {
     id: "opencode-cli",
     modelProvider: "opencode",
@@ -25,14 +29,16 @@ export function buildOpenCodeCliBackend() {
       command: "node",
       args: [
         wrapperPath,
+        "--mode", mode,
         "--agent",
-        "build",
+        agent,
         "--thinking",
       ],
       resumeArgs: [
         wrapperPath,
+        "--mode", mode,
         "--agent",
-        "build",
+        agent,
         "--thinking",
         "--session",
         "{sessionId}",

@@ -8,7 +8,7 @@ Revisado em 15/11/2026 contra OpenClaw 2026.11.2, OpenCode 1.19.4 e Node 26.12.1
 
 - Namespace dos modelos: `opencode/*`. Backend/plugin: `opencode-cli`. Não criar `models.providers.opencode-cli`.
 - O plugin registra o backend CLI e o guard do provider `opencode`. Os hooks `wrapStreamFn` e `wrapSimpleCompletionStreamFn` recusam inferência hosted com `OPENCODE_CLI_ROUTE_REQUIRED`. Isso não impede toda conexão de rede do processo nem fallback para outro provider.
-- O wrapper executa OpenCode local com preflight de `Sisyphus - ultraworker`. O OpenCode controla ferramentas/permissões nativas. `nativeToolMode: "always-on"` não oferece sandbox nem restrição exata às ferramentas do OpenClaw.
+- O wrapper executa OpenCode local com preflight de agente primary/all. O padrão é `build` no modo nativo; OMO/Sisyphus é opt-in. O OpenCode controla ferramentas/permissões nativas. `nativeToolMode: "always-on"` não oferece sandbox nem restrição exata às ferramentas do OpenClaw.
 - O CLI também pode receber `FreeTierError`. A integração não garante elegibilidade, gratuidade ou contorno de política Zen. Catálogo, presença de login e inferência são verificações distintas.
 - `syntheticAuthRefs: ["opencode-cli"]` e `providerCatalogEntry: "./src/provider-discovery.js"` anunciam presença de autenticação nativa, nunca copiam a credencial para o Gateway. Presença não comprova saúde da conta.
 
@@ -19,7 +19,7 @@ Contrato detalhado: [docs/cli-wrapper.md](docs/cli-wrapper.md). ACP é outra rot
 1. Node compatível com o OpenClaw instalado. OpenClaw 2026.11.2 exige `>=24.16.0 <25 || >=26.1.0`, não simplesmente Node 20+.
 2. OpenClaw com as APIs de plugin/CLI backend deste pacote. Conferir `openclaw --version`.
 3. OpenCode acessível ao usuário do serviço Gateway. Conferir `opencode --version` e `opencode --help`. No Windows, usar executável nativo, não shim `.cmd`.
-4. Oh-My-OpenAgent configurado no OpenCode, fornecendo o agente primário exato `Sisyphus - ultraworker`. Na versão 1.19.4, a sintaxe é `opencode plugin -g oh-my-openagent`, NÃO `opencode plugin install oh-my-openagent`. Instalar apenas se necessário e seguir também a documentação do OMO. Conferir `opencode agent list`; não aceitar fallback silencioso para `build`.
+4. Apenas para `mode: "omo"`: Oh-My-OpenAgent compatível com a versão do OpenCode e um agente primary/all disponível. Na v1.19.4, a sintaxe é `opencode plugin -g oh-my-openagent`, NÃO `opencode plugin install oh-my-openagent`. Não instalar OMO para usar o modo nativo. Conferir a listagem da versão escolhida; não aceitar fallback silencioso de persona. A existência de OMO na v1 não comprova suporte na v2.
 5. Login e elegibilidade pertencem ao OpenCode quando exigidos. Não solicitar chaves no chat nem exigir uma API key adicional para o provider exato `opencode` no OpenClaw.
 
 ## Instalação: uma única árvore
@@ -50,6 +50,29 @@ Registro de instalação, `plugins.load.paths` e `rootDir` da inspeção devem a
 ## Configuração
 
 Mesclar trechos ao estado existente, sem substituir mapas inteiros. Usar auxiliares `openclaw config`; validar antes de aplicar. Não copiar o nome do usuário deste host para outra máquina.
+
+### build como padrão, OMO opcional
+
+Seleção por instalação no bloco `plugins.entries.opencode-cli.config`:
+
+```json
+{ "mode": "native" }
+```
+
+`native` é o default mesmo sem config: solicita `build` e bypass de plugins externos. Para usar OMO, definir `{"mode":"omo"}`. Opcionalmente `agent` escolhe id/nome exato, por exemplo `{"mode":"omo","agent":"sisyphus"}` quando esse id estiver disponível. Cold-start e resume recebem o mesmo perfil. Não mudar de perfil reaproveitando sessão antiga: iniciar uma sessão nova para não carregar histórico/prompt de outra persona. A seleção não troca o modelo ou o orçamento.
+
+Comandos de configuração, sem reiniciar o Gateway no turno ativo:
+
+```powershell
+openclaw config set plugins.entries.opencode-cli.config.mode native
+openclaw config validate
+```
+
+Para OMO, trocar somente o valor para `omo`. Inspecionar o resultado e usar o lifecycle suportado; não confundir gravação com ativação no processo carregado.
+
+O wrapper também aceita `--mode native` ou `--mode omo`. A versão é detectada pelo executável: v1 usa `agent list`; v2 usa `debug agents`, resolve nome exibido para id e exige modo primary/all. JSON inválido, id ambíguo, modo subagent ou erro da listagem falham antes da inferência, sem tentar outro agente. `OPENCODE_BIN` pode apontar para binário nativo específico; não usar shims de shell. Não há upgrade global automático.
+
+Bypass depende da versão: v1 nativo usa `--pure` tanto na listagem quanto no run. V2 não aceita essa flag nas versões inspecionadas: o perfil solicita `plugins: []` e política `plugin.use` deny no overlay de configuração do filho, com run `--standalone` para não depender da configuração de um serviço compartilhado. Outras políticas são preservadas. Esse pedido não substitui regras gerenciadas de maior prioridade nem é sandbox de ferramentas. Não desabilita OMO globalmente e não modifica arquivos de login/configuração do OpenCode. APIs/versões diferentes devem ser verificadas; fixtures não provam todos os releases.
 
 Manter `plugins.entries["opencode-cli"].enabled: true`. Desabilitar o plugin legado `plugins.entries.opencode.enabled: false` quando disputar o mesmo provider owner. Se houver allowlist `plugins.allow`, admitir `opencode-cli`. Confirmar o owner pela inspeção.
 
@@ -101,7 +124,7 @@ node scripts/verify-plugin.mjs
 node --test test/test-cli-backend-offline.mjs test/test-cli-process.mjs test/test-cli-wrapper.mjs test/test-native-auth.mjs test/test-zen-inference-guard.mjs test/test-zen-fallback-scope.mjs test/test-telegram-picker-seam.mjs
 ```
 
-Registrar pass/fail/SKIP atuais, não uma contagem histórica fixa. Os seams do core dependem de arquivos com hash de uma versão antiga e podem ser ignorados no core atual. Skip não é aprovação nem teste Telegram E2E. `npm test` executa `test/test-adapter.js`, que faz INFERÊNCIA REAL: não é a suíte offline acima.
+`npm test` executa a suíte offline acima, precedida de validação estrutural. Registrar pass/fail/SKIP atuais, não uma contagem histórica fixa. Os seams do core dependem de arquivos com hash de uma versão antiga e podem ser ignorados no core atual. Skip não é aprovação nem teste Telegram E2E. A inferência real foi separada em `npm run test:live`, exige `OPENCODE_TEST_MODEL` explicitamente autorizado e usa o descriptor/wrapper do plugin. `OPENCODE_TEST_MODE=omo` permite testar OMO; default é native. O adaptador legado src/adapter.js permanece como API legada, não é a entrada desse teste nem o backend registrado.
 
 Após instalação ou mudança de código, usar lifecycle suportado e conferir erros antes de repetir. Já houve `EPERM` em staging de symlinks Windows. Restart com `openclaw gateway restart --safe` deve partir do operador/controle externo, não do turno ativo do próprio Gateway. Mudança documental ou substituição de cópia inativa por alias não exige restart da fonte ativa inalterada.
 
@@ -110,7 +133,7 @@ Aceitação de mudança de transporte exige duas provas separadas:
 1. Wrapper com modelo exato confirmado, prompt inofensivo, sem autorizar ações externas/fallback pago:
 
    ```powershell
-   'Responda somente OC_CANARY_OK. Não use ferramentas.' | node src/opencode-cli-wrapper.js --model opencode/<id-confirmado-no-catálogo> --agent 'Sisyphus - ultraworker'
+   'Responda somente OC_CANARY_OK. Não use ferramentas.' | node src/opencode-cli-wrapper.js --mode native --model opencode/<id-confirmado-no-catálogo>
    ```
 
    O prompt é uma instrução, NÃO bloqueio de ferramentas. Exigir texto, session ID e finalização; heartbeat não basta.
@@ -124,7 +147,7 @@ Aceitação de mudança de transporte exige duas provas separadas:
 | OPENCODE_CLI_ROUTE_REQUIRED | Guard bloqueou tentativa hosted; corrigir política/pin e verificar fallback, sem desligar guard |
 | FreeTierError após CLI comprovado | Investigar elegibilidade/política OpenCode; não prometer correção local |
 | Indisponível antes de spawn | Conferir binding e descoberta de auth nativa, sem copiar segredos |
-| Agente ausente ou fallback build | Corrigir OMO no contexto do usuário do serviço; wrapper deve falhar fechado |
+| Agente ausente ou modo subagent | Conferir modo, versão e id; instalar/configurar OMO apenas se optado por omo. Não substituir por outro agente silenciosamente |
 | Timeout | Conferir fase e stderr; deadline padrão 240 s incluindo preflight não prova modelo offline |
 | Falha cleanup Windows | Ver limites em docs/cli-wrapper.md; não garantir ausência universal de órfãos |
 

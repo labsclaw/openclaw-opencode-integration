@@ -24,7 +24,7 @@ function parseArgs(raw) {
       options.thinking = true; continue;
     }
     if (!positional && arg.startsWith("-")) {
-      if (!["--model", "--session", "--agent", "--variant"].includes(arg)) throw fail(EXIT.args, "unsupported option: " + arg);
+      if (!["--model", "--session", "--agent", "--variant", "--mode"].includes(arg)) throw fail(EXIT.args, "unsupported option: " + arg);
       const key = arg.slice(2);
       const value = raw[++i];
       if (options[key] !== undefined || !value || value.startsWith("-") || /[\x00-\x1f\x7f]/.test(value)) throw fail(EXIT.args, "invalid/duplicate " + arg);
@@ -42,6 +42,8 @@ function parseArgs(raw) {
   }
   if (options.session && !/^ses_[A-Za-z0-9_-]+$/.test(options.session)) throw fail(EXIT.args, "invalid session ID");
   if (options.variant && !/^[A-Za-z0-9._-]{1,64}$/.test(options.variant)) throw fail(EXIT.args, "invalid variant");
+  if (options.mode && !["native", "omo"].includes(options.mode)) throw fail(EXIT.args, "mode must be native or omo");
+  if (options.mode && !options.agent) options.agent = options.mode === "native" ? "build" : "Sisyphus - ultraworker";
   if (options.agent && (options.agent.length > 256 || options.agent !== options.agent.trim())) throw fail(EXIT.args, "invalid agent");
   if (prompt !== undefined && (!prompt.trim() || Buffer.byteLength(prompt) > LIMIT.prompt || prompt.includes("\0"))) throw fail(EXIT.args, "invalid prompt");
   return { ...options, prompt };
@@ -183,45 +185,56 @@ async function main() {
   }
 
   timer = setTimeout(() => abort(fail(EXIT.timeout, "timed out during " + phase + " after " + timeoutMs + "ms")), timeoutMs);
+  let major;
   if (options.agent) {
-    // OpenCode v2 replaced `agent list` with `debug agents` (JSON). Support both so the
-    // preflight stays a fail-closed check instead of a silent fallback to `build`.
-    // Match by `id` only: `run --agent` requires the id (`--agent Build` -> exit 1
-    // "Agent not found", while the display name would wrongly pass here).
-    let found = false;
-    const agentListLine = (line) => {
-      const name = line.trim().replace(/^\s*[-*]\s*/, "");
-      if (name === options.agent || name === options.agent + " (primary)" || name === options.agent + " (all)") found = true;
-    };
-    let sawDebugAgents = false, sawAgentList = false;
-    try {
-      let debugOut = "";
-      await execute(["debug", "agents"], (line) => { debugOut += line + "\n"; }, { preflight: true });
-      sawDebugAgents = true;
-      // `debug agents` prints a multi-line JSON array; parse the accumulated stdout.
-      const parsed = JSON.parse(debugOut.trim());
-      for (const a of (Array.isArray(parsed) ? parsed : [])) {
-        if (a && a.id === options.agent) found = true;
+    let version = "";
+    await execute(["--version"], line => { version += line + "\n"; }, { preflight: true });
+    const match = version.trim().match(/^(?:opencode\s+)?v?([12])\.\d+\.\d+(?:[-+][\w.-]+)?$/i);
+    if (!match) throw fail(EXIT.agent, "unsupported or unrecognized OpenCode version");
+    major = Number(match[1]);
+    if (major === 2) {
+      // V2 uses a private service. Its CLI config overlay reaches that service;
+      // changing only the parent environment cannot reconfigure a shared server.
+      let cliConfig = {};
+      if (env.OPENCODE_CLI_CONFIG_CONTENT !== undefined) {
+        try { cliConfig = JSON.parse(env.OPENCODE_CLI_CONFIG_CONTENT); } catch { throw fail(EXIT.args, "OPENCODE_CLI_CONFIG_CONTENT must be a JSON object"); }
+        if (!cliConfig || typeof cliConfig !== "object" || Array.isArray(cliConfig)) throw fail(EXIT.args, "OPENCODE_CLI_CONFIG_CONTENT must be a JSON object");
       }
-    } catch {
-      // fall through to the legacy surface below
-    }
-    if (!found) {
-      try {
-        await execute(["agent", "list"], agentListLine, { preflight: true });
-        sawAgentList = true;
-      } catch (error) {
-        // Preserve the primary failure identity (timeout/quota/spawn). Only a genuine
-        // "both listing surfaces missing" becomes EXIT.agent; swallowing a timeout here
-        // would relabel exit 124 as 68 and hide the /timed out during preflight/ text.
-        if (error && error.exitCode) throw error;
-        if (!sawDebugAgents) throw fail(EXIT.agent, "cannot list OpenCode agents (debug agents and agent list failed)");
-        throw fail(EXIT.agent, "cannot list OpenCode agents (agent list failed)");
+      const merged = { ...config, ...cliConfig, snapshots: false };
+      // V2 migrates small_model to agents.title.model; the native field wins.
+      // Pin both spellings so neither inherited source can select a paid helper.
+      if (options.model) {
+        if (merged.agents !== undefined && (!merged.agents || typeof merged.agents !== "object" || Array.isArray(merged.agents))) throw fail(EXIT.args, "agents must be an object");
+        const title = merged.agents?.title;
+        if (title !== undefined && (!title || typeof title !== "object" || Array.isArray(title))) throw fail(EXIT.args, "title agent must be an object");
+        merged.small_model = options.model;
+        merged.agents = { ...merged.agents, title: { ...title, model: options.model } };
       }
+      if (options.mode === "native") {
+        if (merged.policies !== undefined && !Array.isArray(merged.policies)) throw fail(EXIT.args, "policies must be an array");
+        merged.plugins = [];
+        merged.policies = [...(merged.policies ?? []), { action: "plugin.use", resource: "*", effect: "deny" }];
+      }
+      env.OPENCODE_CONFIG_CONTENT = env.OPENCODE_CLI_CONFIG_CONTENT = JSON.stringify(merged);
+      env.OPENCODE_CONFIG_PROJECT_DISABLE = "true";
+      let raw = "";
+      await execute(["debug", "agents", "--standalone"], line => { raw += line + "\n"; }, { preflight: true });
+      let agents;
+      try { agents = JSON.parse(raw); } catch { throw fail(EXIT.agent, "invalid debug agents JSON"); }
+      if (!Array.isArray(agents)) throw fail(EXIT.agent, "debug agents must return an array");
+      const matches = agents.filter(a => a && (a.id === options.agent || a.name === options.agent));
+      if (matches.length !== 1 || !["primary", "all"].includes(matches[0].mode) || typeof matches[0].id !== "string" || !matches[0].id.trim() || matches[0].id.length > 256 || /[\x00-\x1f\x7f]/.test(matches[0].id)) throw fail(EXIT.agent, "requested primary agent is missing, ambiguous or ineligible: " + options.agent);
+      options.agent = matches[0].id;
+    } else {
+      let found = false;
+      const flags = options.mode === "native" ? ["--pure"] : [];
+      await execute(["agent", "list", ...flags], line => { if (line === options.agent + " (primary)" || line === options.agent + " (all)") found = true; }, { preflight: true });
+      if (!found) throw fail(EXIT.agent, "requested primary agent is not listed: " + options.agent);
     }
-    if (!found) throw fail(EXIT.agent, "requested primary agent is not listed: " + options.agent);
   }
   const cliArgs = ["run", "--format", "json"];
+  if (major === 1 && options.mode === "native") cliArgs.push("--pure");
+  if (major === 2) cliArgs.push("--standalone");
   for (const key of ["model", "agent", "session", "variant"]) if (options[key]) cliArgs.push("--" + key, options[key]);
   if (options.thinking) cliArgs.push("--thinking");
   // Always stdin, never argv plus stdin. Long/multiline prompts don't hit Windows argv limits.

@@ -14,6 +14,16 @@ test("descriptor is honest always-on and has no exact-cap enforcement declaratio
   // The previous 'Sisyphus - ultraworker' is an OMO display name that this CLI rejects.
   for (const args of [backend.config.args, backend.config.resumeArgs]) assert.equal(args[args.indexOf("--agent") + 1], "build");
 });
+test("native default, explicit OMO and custom agent reach both cold and resume", () => {
+  for (const [config, mode, agent] of [[{}, "native", "build"], [{mode:"omo"}, "omo", "Sisyphus - ultraworker"], [{mode:"omo",agent:"sisyphus"},"omo","sisyphus"]]) {
+    const b = buildOpenCodeCliBackend(config);
+    for (const argv of [b.config.args,b.config.resumeArgs]) {
+      assert.equal(argv[argv.indexOf("--mode")+1],mode);
+      assert.equal(argv[argv.indexOf("--agent")+1],agent);
+    }
+  }
+  for (const config of [{mode:"unknown"},{agent:""},{agent:" build"},{agent:"bad\nagent"}]) assert.throws(()=>buildOpenCodeCliBackend(config));
+});
 for (const baseArgs of [backend.config.args,backend.config.resumeArgs]) {
   test("cold/resume: explicit empty or restricted tools throw before execution", () => {
     for (const toolAvailability of [{native:[],openClaw:[]},{native:["read"],openClaw:[]},{native:[],openClaw:["read"]}]) {

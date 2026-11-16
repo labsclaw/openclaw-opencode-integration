@@ -10,7 +10,7 @@ export default definePluginEntry({
     // The model namespace stays opencode/*; this plugin only replaces the
     // inference transport with a local CLI process. Catalog discovery remains
     // owned by models.providers.opencode and ultra-models-skill.
-    api.registerCliBackend(buildOpenCodeCliBackend());
+    api.registerCliBackend(buildOpenCodeCliBackend(api.pluginConfig));
     // Refuse the hosted text-stream route if a session pin bypasses the CLI.
     // This is not a catalog provider and does not change existing Zen models.
     api.registerProvider(buildOpenCodeZenInferenceGuard());
