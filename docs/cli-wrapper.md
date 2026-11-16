@@ -67,7 +67,7 @@ nativeToolMode=always-on; no toolAvailabilityEnforcement claim. The installed Op
 
 ## Offline verification
 
-Do not run npm test for offline checks: test-adapter.js calls live inference. Use:
+`npm test` runs structural validation followed by the offline suite. Live inference is separate: `npm run test:live` requires an explicitly authorized `OPENCODE_TEST_MODEL`. For the offline suite alone, use:
 
     node --test test/*.mjs
 
